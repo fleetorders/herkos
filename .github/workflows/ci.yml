@@ -15,5 +15,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      # Formatting is enforced by a local hook, so CI is its backstop: hooks are
+      # skippable (--no-verify, a fresh clone before setup) and CI is not.
+      - run: npm run format:check
       - run: npm test
       - run: npm run build

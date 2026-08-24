@@ -1,0 +1,15 @@
+#!/usr/bin/env sh
+# Repo-owned pre-push checks (etymd never touches this file). The generated hook already runs
+# `npm run typecheck`; this adds the test suite, which is where every gate proves it fires.
+# Until now the suite ran only in CI, which is the slowest feedback loop there is: a failure
+# was invisible until after the push.
+#
+# The runner is wrapped in a scrub of git's exported environment. Git exports GIT_DIR and
+# GIT_INDEX_FILE to every hook, and a child git obeys those over its own working directory —
+# so a suite that builds fixture repositories can end up committing into THIS repository
+# instead of into its fixture. The wrapper covers the whole runner rather than naming the
+# variables to strip: one added by a future git version is scrubbed without anyone editing
+# this line.
+echo "› npm test (git environment scrubbed)"
+# shellcheck disable=SC2046  # the split is the point: each name becomes its own `-u NAME` argument
+env $(env | grep -o '^GIT_[A-Za-z0-9_]*' | sed 's/^/-u /') npm test || exit 1
