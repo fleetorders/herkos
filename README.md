@@ -1,11 +1,11 @@
 # herkos
 
 <div align="center">
-  <img src="https://raw.githubusercontent.com/triartleet/herkos/main/media/herkos-logo.png" width="520" alt="herkos — an interlocked wall of shields over a line an agent's forbidden actions cannot cross">
+  <img src="https://raw.githubusercontent.com/fleetorders/herkos/main/media/herkos-logo.png" width="520" alt="herkos — an interlocked wall of shields over a line an agent's forbidden actions cannot cross">
   <p>
     <a href="https://www.npmjs.com/package/herkos"><img src="https://img.shields.io/npm/v/herkos.svg?label=npm&color=cb3837" alt="npm version"></a>
-    <a href="https://github.com/triartleet/herkos/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/triartleet/herkos/ci.yml?branch=main&label=CI" alt="CI"></a>
-    <a href="https://github.com/triartleet/herkos/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license"></a>
+    <a href="https://github.com/fleetorders/herkos/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/fleetorders/herkos/ci.yml?branch=main&label=CI" alt="CI"></a>
+    <a href="https://github.com/fleetorders/herkos/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license"></a>
   </p>
 </div>
 
