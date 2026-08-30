@@ -35,6 +35,14 @@
     "guard"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fleetorders/herkos.git"
+  },
+  "homepage": "https://github.com/fleetorders/herkos#readme",
+  "bugs": {
+    "url": "https://github.com/fleetorders/herkos/issues"
+  },
   "engines": {
     "node": ">=18.17"
   },
