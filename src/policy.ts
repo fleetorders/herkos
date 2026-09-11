@@ -232,7 +232,10 @@ export const BASELINE: Rule[] = [
   },
   {
     id: "macos-keychain",
-    class: "fetched-exec",
+    // In substance a credential read: dumping or exporting what the keychain
+    // holds. The matchers are command-shaped, but the class labels what the
+    // rule protects, and refusals grouped under "fetched-exec" would lie.
+    class: "credential-read",
     description: "macOS keychain credential dumps (holds OS-level secrets)",
     commandPrefixes: [
       ["security", "dump-keychain"],
@@ -382,6 +385,16 @@ function checkEntries(
       );
       return;
     }
+    // ":" is meaningful in that same syntax (command rules spell it
+    // `Bash(curl:*)`), so a target carrying one might not mean what it says.
+    // Unlike grep, the harness's parser cannot be asked offline — so an
+    // unprovable character is refused, the same stance as grepAccepts.
+    if ((key === "denyRead" || key === "codexDeny") && entry.includes(":")) {
+      errors.push(
+        `rule ${rid}: ${key} entry ${n} contains ":" — meaningful in the harness's permission rule syntax, so it is refused rather than risk a corrupted deny rule`,
+      );
+      return;
+    }
     // Path fragments are regex-escaped before they reach grep, so only raw
     // regexes — command patterns and notPaths exclusions — need the
     // evaluator's own verdict.
@@ -480,6 +493,20 @@ export function validatePolicy(policy: EffectivePolicy): ValidationResult {
       typeof rule.id === "string" && rule.id.length > 0
         ? rule.id
         : `#${idx + 1}`;
+    // A multi-line id or description would print a multi-line refusal or
+    // notice line. They are safely shell-quoted, so this is about the
+    // messages, not the script — still refused at the door.
+    if (typeof rule.id === "string" && /[\r\n]/.test(rule.id)) {
+      errors.push(`rule ${JSON.stringify(rule.id)}: id must be a single line`);
+    }
+    if (
+      typeof rule.description === "string" &&
+      /[\r\n]/.test(rule.description)
+    ) {
+      errors.push(
+        `rule ${rid.replace(/[\r\n]+/g, " ")}: description must be a single line`,
+      );
+    }
     if (rid.startsWith("#")) {
       errors.push(`rule ${rid}: missing or empty id`);
     } else {

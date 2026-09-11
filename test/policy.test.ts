@@ -160,6 +160,32 @@ describe("policy validation", () => {
       ),
     ).toBe(true);
   });
+  it("labels the keychain rule as what it is: a credential read", () => {
+    const kc = BASELINE.find((r) => r.id === "macos-keychain");
+    expect(kc?.class).toBe("credential-read");
+  });
+
+  it("refuses a colon in a native deny target", () => {
+    const v = validatePolicy(
+      policyWith({ denyRead: ["~/secrets/a:b"], codexDeny: ["~/x:y"] }),
+    );
+    expect(v.errors.filter((e) => e.includes('contains ":"')).length).toBe(2);
+  });
+
+  it("refuses a multi-line id or description", () => {
+    const v = validatePolicy(
+      policyWith({ id: "bad\nid", description: "two\nlines" }),
+    );
+    expect(v.errors.some((e) => e.includes("id must be a single line"))).toBe(
+      true,
+    );
+    expect(
+      v.errors.some((e) => e.includes("description must be a single line")),
+    ).toBe(true);
+    // The messages themselves stay single-line.
+    expect(v.errors.every((e) => !/[\r\n]/.test(e))).toBe(true);
+  });
+
   it("rejects a duplicate id and a missing id", () => {
     const v = validatePolicy({
       rules: [
