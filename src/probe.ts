@@ -68,6 +68,12 @@ export interface ProbeRun {
   stdout: string;
   stderr: string;
   timedOut: boolean;
+  /**
+   * The child could not be run at all (a missing binary, a permission error) —
+   * a broken setup, distinct from a ceiling hit, and diagnosed as its own
+   * outcome so it is never reported as "inconclusive".
+   */
+  spawnError?: string;
 }
 
 /** Runs one headless command. Injectable so tests never spawn a real harness. */
@@ -103,7 +109,14 @@ const realRunner: ProbeRunner = (cmd, opts) => {
     code: r.status,
     stdout: r.stdout ?? "",
     stderr: r.stderr ?? "",
-    timedOut: r.signal === "SIGTERM" || Boolean(r.error),
+    // Only the timeout signal is a ceiling hit; a spawn error is a broken
+    // setup and is reported as its own outcome below.
+    timedOut: r.signal === "SIGTERM",
+    ...(r.error
+      ? {
+          spawnError: `${cmd.bin}: ${(r.error as NodeJS.ErrnoException).code ?? r.error.message}`,
+        }
+      : {}),
   };
 };
 
@@ -119,6 +132,12 @@ export function judgeRun(
   hasDecoy: boolean,
 ): { verdict: ProbeVerdict; detail: string } {
   const text = `${run.stdout}\n${run.stderr}`;
+  if (run.spawnError) {
+    return {
+      verdict: "unavailable",
+      detail: `the harness binary could not be run (${run.spawnError}) — a broken setup, not a verdict on the wiring; check the binary and PATH`,
+    };
+  }
   if (run.timedOut) {
     return { verdict: "inconclusive", detail: "hit the time/spend ceiling" };
   }

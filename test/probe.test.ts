@@ -54,6 +54,14 @@ describe("judging a probe run", () => {
     expect(judgeRun(run({ timedOut: true }), true).verdict).toBe(
       "inconclusive",
     );
+    expect(judgeRun(run({ timedOut: true }), true).detail).toContain("ceiling");
+  });
+
+  it("reports a spawn failure as its own outcome, never as a ceiling hit", () => {
+    const j = judgeRun(run({ spawnError: "claude: ENOENT" }), true);
+    expect(j.verdict).toBe("unavailable");
+    expect(j.detail).toContain("claude: ENOENT");
+    expect(j.detail).not.toContain("ceiling");
   });
 
   it("is inconclusive when nothing decisive appears", () => {
@@ -94,6 +102,36 @@ function stubAdapter(
 }
 
 const okVerify: VerifyResult = { ok: true, state: "ok", detail: "wired" };
+
+describe("the real runner against a binary that cannot run", () => {
+  const adapter: HarnessAdapter = {
+    id: "h",
+    name: "h",
+    detect: () => ({ installed: true, detail: "" }),
+    wire: () => ({ changed: [], detail: "" }),
+    unwire: () => ({ changed: [], detail: "" }),
+    verify: () => okVerify,
+    liveProbeCommand: (): ProbeCommand => ({
+      bin: "herkos-no-such-binary-xyz",
+      args: ["--version"],
+      env: {},
+      ceilingNote: "stub",
+    }),
+  };
+
+  it("reports the spawn error, not a ceiling hit", () => {
+    const reports = runLiveProbe([adapter], {
+      budgetUsd: 0.5,
+      timeoutMs: 5_000,
+    }); // no injected runner: the real spawn path
+    const outcomes = reports[0]!.outcomes;
+    expect(outcomes.length).toBe(PROBE_CASES.length);
+    for (const o of outcomes) {
+      expect(o.verdict).toBe("unavailable");
+      expect(o.detail).toContain("ENOENT");
+    }
+  });
+});
 
 describe("running the probe against a stubbed harness", () => {
   it("blocks: a harness whose hook fires reports every case blocked, and leaks nothing", () => {
