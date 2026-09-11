@@ -48,6 +48,22 @@ function parseVersion(
   return { major: Number(m[1]), minor: Number(m[2]), raw: m[0] };
 }
 
+/**
+ * The one ROOT-level key herkos needs. TOML scopes a bare key to the table
+ * header above it, so this line must sit before the first `[table]` in the
+ * file — appended after the user's tables it silently lands inside the last
+ * one, the profile is defined but never selected, and Codex refuses the
+ * config ("defines [permissions] profiles but does not set
+ * default_permissions"). Verified on codex-cli 0.154.0, 2026-09-11.
+ */
+const ROOT_MARK =
+  "# >>> herkos managed root key (see the herkos block at the end) <<<";
+const ROOT_LINE = `default_permissions = "${PROFILE}" ${ROOT_MARK}`;
+const ROOT_RE = new RegExp(
+  `^.*${ROOT_MARK.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\n?`,
+  "m",
+);
+
 function buildManagedBlock(): { block: string; hasDeny: boolean } {
   const { paths, globs } = collectCodexDeny(loadEffectivePolicy());
   const lines = [
@@ -55,7 +71,7 @@ function buildManagedBlock(): { block: string; hasDeny: boolean } {
     "# herkos never-list for Codex — credential reads denied (OS-enforced via the",
     "# permission profile). Fetched-code blocking is delivered by the herkos hook",
     "# (see hooks.json); run /hooks in Codex once to trust it. 'herkos uninstall' removes this.",
-    `default_permissions = "${PROFILE}"`,
+    `# The selecting key, default_permissions = "${PROFILE}", is a ROOT key and lives above the first table.`,
     `[permissions.${PROFILE}]`,
     `description = "herkos never-list: credential reads denied"`,
     `extends = ":workspace"`,
@@ -68,10 +84,59 @@ function buildManagedBlock(): { block: string; hasDeny: boolean } {
   return { block: lines.join("\n"), hasDeny: paths.length + globs.length > 0 };
 }
 
+const escapeRe = (s: string): string =>
+  s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Every managed block in the file, GLOBAL. The markers carry parentheses, so
+ * they must be escaped before they become a regex: the unescaped form never
+ * matched the real marker line, the block was never found again, and each
+ * `init` appended one more copy until Codex refused the file ("duplicate
+ * key"). Found on a live install 2026-09-11; idempotency is the adapter
+ * contract (types.ts), so the block is stripped everywhere and written once.
+ */
+const BLOCK_RE = new RegExp(
+  `\\n?${escapeRe(BEGIN)}[\\s\\S]*?${escapeRe(END)}\\n?`,
+  "gm",
+);
+
+function stripBlocks(content: string): string {
+  return content.replace(BLOCK_RE, "\n");
+}
+
 function upsertBlock(content: string, block: string): string {
-  const re = new RegExp(`${BEGIN}[\\s\\S]*?${END}\\n?`, "m");
-  if (re.test(content)) return content.replace(re, block + "\n");
-  return `${content}${content && !content.endsWith("\n") ? "\n" : ""}${block}\n`;
+  const c = stripBlocks(content).replace(/\n{3,}$/, "\n\n");
+  return `${c}${c && !c.endsWith("\n") ? "\n" : ""}${block}\n`;
+}
+
+function removeRootLine(content: string): string {
+  return content.replace(ROOT_RE, "");
+}
+
+/**
+ * Put the root line in the root section: before the first table header, or
+ * before our own managed block if that comes first, else at the end. Any
+ * previous herkos root line is removed first, so the call is idempotent.
+ */
+function upsertRootLine(content: string): string {
+  const c = removeRootLine(content);
+  const lines = c.split("\n");
+  let at = lines.findIndex((l) => /^\s*\[/.test(l) || l.startsWith(BEGIN));
+  if (at === -1) at = lines.length;
+  const before = lines.slice(0, at);
+  const after = lines.slice(at);
+  // Keep the file tidy: a blank line between the user's root keys and ours.
+  if (before.length && before[before.length - 1]?.trim() !== "")
+    before.push("");
+  return [...before, ROOT_LINE, ...after].join("\n");
+}
+
+/** Is the herkos root line present in the ROOT section (above every table)? */
+function rootLineActive(content: string): boolean {
+  const idx = content.indexOf(ROOT_LINE);
+  if (idx === -1) return false;
+  const head = content.slice(0, idx);
+  return !/^\s*\[/m.test(head);
 }
 
 // Wire the shared hook into Codex's hooks.json (root wrapper key "hooks").
@@ -147,13 +212,13 @@ export const codexAdapter: HarnessAdapter = {
       }
     }
     // Refuse to clobber a user's own default_permissions set OUTSIDE our block.
-    const outside = content.replace(
-      new RegExp(`${BEGIN}[\\s\\S]*?${END}`, "m"),
-      "",
-    );
+    const outside = stripBlocks(removeRootLine(content));
     const conflict = /^\s*default_permissions\s*=/m.test(outside);
     const { block } = buildManagedBlock();
-    fs.writeFileSync(p, upsertBlock(content, block));
+    // Tables go at the end; the selecting root key goes above the first table.
+    let next = upsertBlock(content, block);
+    if (!conflict) next = upsertRootLine(next);
+    fs.writeFileSync(p, next);
     changed.push(p);
 
     // 2. fetched-exec → shared hook, wired into hooks.json (needs /hooks trust)
@@ -178,9 +243,8 @@ export const codexAdapter: HarnessAdapter = {
     const p = configPath();
     if (fs.existsSync(p)) {
       const c = fs.readFileSync(p, "utf8");
-      const re = new RegExp(`\\n?${BEGIN}[\\s\\S]*?${END}\\n?`, "m");
-      if (re.test(c)) {
-        fs.writeFileSync(p, c.replace(re, "\n"));
+      if (c.includes(BEGIN) || ROOT_RE.test(c)) {
+        fs.writeFileSync(p, removeRootLine(stripBlocks(c)));
         changed.push(p);
       }
     }
@@ -215,6 +279,17 @@ export const codexAdapter: HarnessAdapter = {
       return {
         ok: false,
         detail: "credential-deny profile not present — run 'herkos init'",
+      };
+    }
+    const cfg = fs.readFileSync(p, "utf8");
+    const userSelects = /^\s*default_permissions\s*=\s*"herkos"/m.test(
+      removeRootLine(cfg),
+    );
+    if (!rootLineActive(cfg) && !userSelects) {
+      return {
+        ok: false,
+        detail:
+          "credential-deny profile present but NOT selected — default_permissions is missing from the root section, so the OS deny is inactive; run 'herkos init'",
       };
     }
     const hookWired =

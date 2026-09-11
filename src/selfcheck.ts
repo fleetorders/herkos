@@ -17,11 +17,19 @@ export interface CheckCase {
   name: string;
   wantExit: number;
   payload: string;
+  /**
+   * The baseline rule this case exercises. Disabling a rule by id is a
+   * sanctioned action (D-003), so when that rule is off the case must PASS
+   * THROUGH (exit 0) — proving the disable held — rather than be reported as
+   * a broken guard.
+   */
+  rule?: string;
 }
 
 export const CASES: CheckCase[] = [
   {
     name: "blocks reading an SSH private key",
+    rule: "ssh-private-keys",
     wantExit: 2,
     payload: JSON.stringify({
       tool_name: "Read",
@@ -30,6 +38,7 @@ export const CASES: CheckCase[] = [
   },
   {
     name: "blocks cat of a .env file",
+    rule: "dotenv-files",
     wantExit: 2,
     payload: JSON.stringify({
       tool_name: "Bash",
@@ -38,6 +47,7 @@ export const CASES: CheckCase[] = [
   },
   {
     name: "blocks curl | sh",
+    rule: "curl-pipe-shell",
     wantExit: 2,
     payload: JSON.stringify({
       tool_name: "Bash",
@@ -46,6 +56,7 @@ export const CASES: CheckCase[] = [
   },
   {
     name: "blocks keychain dump",
+    rule: "macos-keychain",
     wantExit: 2,
     payload: JSON.stringify({
       tool_name: "Bash",
@@ -85,18 +96,56 @@ export interface CheckResult {
   gotExit: number;
 }
 
+/** Is jq (the hook's payload parser) installed? Its absence is the documented degradation. */
+export function jqAvailable(): boolean {
+  return spawnSync("command", ["-v", "jq"], { shell: true }).status === 0;
+}
+
+/**
+ * Parse-check a generated hook with `sh -n`. A pattern baked in unquoted would
+ * turn the whole script into a syntax error that exits 2 on every call — this
+ * catches that class before the hook is trusted.
+ */
+export function syntaxCheck(script: string): { ok: boolean; detail: string } {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "herkos-syntax-"));
+  try {
+    const f = path.join(tmp, "hook.sh");
+    fs.writeFileSync(f, script);
+    const r = spawnSync("sh", ["-n", f], { encoding: "utf8", timeout: 10_000 });
+    const ok = r.status === 0;
+    return {
+      ok,
+      detail: ok
+        ? "clean"
+        : (r.stderr ?? "").trim() || `sh -n exited ${r.status ?? -1}`,
+    };
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 export function runSelfCheck(): {
   results: CheckResult[];
   ok: boolean;
   jq: boolean;
 } {
-  const policy = compile(loadEffectivePolicy());
+  const effective = loadEffectivePolicy();
+  const policy = compile(effective);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "herkos-selfcheck-"));
   const script = path.join(tmp, "hook.sh");
   fs.writeFileSync(script, generateHook(policy), { mode: 0o755 });
-  const jq = spawnSync("command", ["-v", "jq"], { shell: true }).status === 0;
+  const jq = jqAvailable();
+  const disabled = new Set(effective.disabled);
 
-  const results: CheckResult[] = [];
+  const syn = syntaxCheck(script);
+  const results: CheckResult[] = [
+    {
+      name: "generated hook parses (sh -n)",
+      ok: syn.ok,
+      wantExit: 0,
+      gotExit: syn.ok ? 0 : 1,
+    },
+  ];
   for (const c of CASES) {
     const r = spawnSync("sh", [script], {
       input: c.payload,
@@ -104,10 +153,15 @@ export function runSelfCheck(): {
       timeout: 10_000,
     });
     const gotExit = r.status ?? -1;
+    // A case whose rule the user disabled by id must now pass through.
+    const off = c.rule !== undefined && disabled.has(c.rule);
+    const wantExit = off ? 0 : c.wantExit;
     results.push({
-      name: c.name,
-      ok: gotExit === c.wantExit,
-      wantExit: c.wantExit,
+      name: off
+        ? `${c.name} — rule '${c.rule}' disabled, passes through`
+        : c.name,
+      ok: gotExit === wantExit,
+      wantExit,
       gotExit,
     });
   }
