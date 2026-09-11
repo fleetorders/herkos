@@ -116,12 +116,15 @@ describe("policy validation", () => {
       ),
     ).toBe(true);
   });
-  it("rejects an unknown rule class", () => {
-    const v = validatePolicy(policyWith({ class: "sideways" }));
+  it("accepts an open, user-named class label", () => {
+    const v = validatePolicy(policyWith({ class: "outbound-data" }));
+    expect(v.errors).toEqual([]);
+  });
+  it("rejects a class that is not a simple label", () => {
+    const v = validatePolicy(policyWith({ class: "not a label!" }));
     expect(
       v.errors.some(
-        (e) =>
-          e.includes("test-rule") && e.includes('unknown class "sideways"'),
+        (e) => e.includes("test-rule") && e.includes("simple label"),
       ),
     ).toBe(true);
   });
@@ -221,6 +224,8 @@ describe("degradation on an invalid regex baked past validation", () => {
         id: "broken",
         class: "fetched-exec",
         description: "invalid on purpose",
+        disposition: "block",
+        message: "",
         pathRegex: "",
         commandRegexes: ["foo("],
         denyRead: [],
@@ -230,6 +235,8 @@ describe("degradation on an invalid regex baked past validation", () => {
         id: "curl-pipe-shell",
         class: "fetched-exec",
         description: curlRule.description,
+        disposition: "block",
+        message: "",
         pathRegex: "",
         commandRegexes: curlRule.commandPatterns ?? [],
         denyRead: [],

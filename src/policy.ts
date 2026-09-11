@@ -18,12 +18,37 @@ import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { HERKOS_VERSION } from "./version.js";
 
-export type RuleClass = "credential-read" | "fetched-exec";
+/**
+ * A rule's class is an OPEN label. `credential-read` and `fetched-exec` are the
+ * two curated baseline classes; a user rule may name its own — `command-never`,
+ * `outbound-data`, whatever describes it — so the refusal names the real class
+ * instead of one of two that would lie. The label is display and grouping only;
+ * it changes no matching. See D-003: the baseline stays curated and small; the
+ * openness is for the user's own never-list.
+ */
+export type RuleClass = string;
+
+/** The two curated baseline classes, named for reference. */
+export const BASELINE_CLASSES = ["credential-read", "fetched-exec"] as const;
+
+/**
+ * What a matched rule does. `block` (the default, and every baseline rule)
+ * refuses the call. `open` lets the call THROUGH but surfaces the rule's message
+ * to the session — for approval-gated rules ("never push without asking") that a
+ * hard block would be too blunt for, and that filing as a block would mislabel.
+ * An open rule is advisory, not a wall; it is never a permission or an allow-list
+ * (it grants nothing), so it stays inside the boundary.
+ */
+export type Disposition = "block" | "open";
 
 export interface Rule {
   id: string;
   class: RuleClass;
   description: string;
+  /** block (default) refuses the call; open lets it through and surfaces `message`. */
+  disposition?: Disposition;
+  /** A line shown to the session when the rule matches — appended on a block, the point of an open rule. */
+  message?: string;
   /** Path fragments matched as substrings against file paths AND command text (credential-read). */
   paths?: string[];
   /** Extended regexes matched against command text (fetched-exec / command-shaped rules). */
@@ -250,7 +275,6 @@ export interface ValidationResult {
   warnings: string[];
 }
 
-const RULE_CLASSES: readonly string[] = ["credential-read", "fetched-exec"];
 const KNOWN_RULE_KEYS: readonly string[] = [
   "id",
   "class",
@@ -258,6 +282,8 @@ const KNOWN_RULE_KEYS: readonly string[] = [
   "paths",
   "commandPatterns",
   "commandPrefixes",
+  "disposition",
+  "message",
   "match",
   "notMatch",
   "codexDeny",
@@ -414,8 +440,34 @@ export function validatePolicy(policy: EffectivePolicy): ValidationResult {
       if (seen.has(rid)) errors.push(`rule ${rid}: duplicate id`);
       seen.add(rid);
     }
-    if (!RULE_CLASSES.includes(rule.class)) {
-      errors.push(`rule ${rid}: unknown class "${String(rule.class)}"`);
+    if (
+      typeof rule.class !== "string" ||
+      !/^[a-z0-9][a-z0-9-]*$/i.test(rule.class)
+    ) {
+      errors.push(
+        `rule ${rid}: class must be a simple label (letters, digits, hyphens); got ${JSON.stringify(rule.class)}`,
+      );
+    }
+    if (
+      rule.disposition !== undefined &&
+      rule.disposition !== "block" &&
+      rule.disposition !== "open"
+    ) {
+      errors.push(
+        `rule ${rid}: disposition must be "block" or "open" (got ${JSON.stringify(rule.disposition)})`,
+      );
+    }
+    if (rule.message !== undefined) {
+      if (typeof rule.message !== "string" || rule.message.length === 0) {
+        errors.push(`rule ${rid}: message must be a non-empty string`);
+      } else if (/[\r\n]/.test(rule.message)) {
+        errors.push(`rule ${rid}: message must be a single line`);
+      }
+    }
+    if (rule.disposition === "open" && !rule.message && !rule.description) {
+      errors.push(
+        `rule ${rid}: an open rule needs a message (or a description) — it exists to say something`,
+      );
     }
     const hasPaths = (rule.paths ?? []).length > 0;
     const hasCmds =
@@ -476,6 +528,10 @@ export interface CompiledRule {
   id: string;
   class: RuleClass;
   description: string;
+  /** block refuses; open lets the call through with a surfaced message. */
+  disposition: Disposition;
+  /** The line surfaced to the session on a match ("" if none). */
+  message: string;
   /** POSIX extended regex alternation of this rule's escaped path fragments ("" if none). */
   pathRegex: string;
   /** This rule's extended regexes for command text. */
@@ -526,6 +582,8 @@ export function policyFingerprint(rules: CompiledRule[]): string {
       r.id,
       r.class,
       r.description,
+      r.disposition,
+      r.message,
       r.pathRegex,
       r.commandRegexes,
       r.commandPrefixes,
@@ -606,6 +664,8 @@ export function compile(policy: EffectivePolicy): CompiledPolicy {
     id: r.id,
     class: r.class,
     description: r.description,
+    disposition: r.disposition === "open" ? "open" : "block",
+    message: r.message ?? "",
     pathRegex: (r.paths ?? []).map(escapeERE).join("|"),
     commandRegexes:
       (r.commandPatterns ?? []).length > 0

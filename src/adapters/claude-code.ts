@@ -300,30 +300,36 @@ export function readInstalledStamp(file: string = hookPath()): string | null {
  */
 export function generateHook(policy: CompiledPolicy): string {
   // One check per rule (not one merged regex) so a refusal can name its rule.
-  // Both rule bodies take the subject as "$1" and the kind as "$2", so the same
-  // baked lines serve every tool argument the extractor found.
-  // enforce <id> <description> <kind> <subject> <regex>
+  // A block rule calls `enforce` (exit 2 on match); an open rule calls `notice`
+  // (surface a message, never block). Both bodies take the subject as "$1" and
+  // the kind as "$2", so the same baked lines serve every tool argument found.
+  //   enforce <id> <description> <kind> <subject> <regex> <message>
+  //   notice  <id> <message>     <kind> <subject> <regex>
+  const line = (rule: CompiledRule, re: string): string =>
+    rule.disposition === "open"
+      ? `  notice ${shQuote(rule.id)} ${shQuote(rule.message || rule.description)} "$2" "$1" ${shQuote(re)}`
+      : `  enforce ${shQuote(rule.id)} ${shQuote(rule.description)} "$2" "$1" ${shQuote(re)} ${shQuote(rule.message)}`;
   const pathLine = (rule: CompiledRule): string =>
-    rule.pathRegex === ""
-      ? ""
-      : `  enforce ${shQuote(rule.id)} ${shQuote(rule.description)} "$2" "$1" ${shQuote(rule.pathRegex)}`;
-  const cmdLine = (rule: CompiledRule, re: string): string =>
-    `  enforce ${shQuote(rule.id)} ${shQuote(rule.description)} "$2" "$1" ${shQuote(re)}`;
+    rule.pathRegex === "" ? "" : line(rule, rule.pathRegex);
 
+  // Open rules first, so a notice always surfaces before any block rule exits.
+  const ordered = [...policy.rules].sort((a, b) =>
+    a.disposition === b.disposition ? 0 : a.disposition === "open" ? -1 : 1,
+  );
   // A command-shaped argument is checked against BOTH vocabularies: it may name
-  // a credential file (`cat ~/.kube/config`) or be fetched code piped to a shell.
+  // a credential file or be fetched code piped to a shell.
   const commandRules =
-    policy.rules
+    ordered
       .flatMap((rule) => [
         pathLine(rule),
-        ...rule.commandRegexes.map((re) => cmdLine(rule, re)),
+        ...rule.commandRegexes.map((re) => line(rule, re)),
       ])
-      .filter((line) => line !== "")
+      .filter((l) => l !== "")
       .join("\n") || "  :";
   const pathRules =
-    policy.rules
+    ordered
       .map(pathLine)
-      .filter((line) => line !== "")
+      .filter((l) => l !== "")
       .join("\n") || "  :";
 
   const shList = (xs: readonly string[]): string => shQuote(xs.join(" "));
@@ -392,11 +398,24 @@ enforce() {
   rc=$?
   if [ "$rc" -eq 0 ]; then
     log_block "$1"
-    block "BLOCKED (herkos) rule $1 — $2. This $3 is on the never-list. To adjust: narrow the rule in $POLICY_FILE or disable it by id; 'herkos rules' lists the policy."
+    _m="BLOCKED (herkos) rule $1 — $2. This $3 is on the never-list. To adjust: narrow the rule in $POLICY_FILE or disable it by id; 'herkos rules' lists the policy."
+    [ -n "$6" ] && _m="$_m $6"
+    block "$_m"
   fi
   if [ "$rc" -ge 2 ]; then
     printf "herkos DEGRADED: rule %s pattern could not be evaluated (grep exit %s) — that rule is OFF for this call. Run 'herkos validate'.\\n" "$1" "$rc" >&2
   fi
+}
+
+# notice ID MESSAGE KIND SUBJECT REGEX — an OPEN rule: surface the message to
+# the session on a match and let the call THROUGH. Never blocks, never changes
+# the exit code, and a grep error just means no notice for this call.
+notice() {
+  [ -n "$5" ] || return 0
+  if printf '%s' "$4" | grep -Eq -e "$5" 2>/dev/null; then
+    printf 'herkos NOTICE (rule %s): %s\\n' "$1" "$2" >&2
+  fi
+  return 0
 }
 
 # command_rules SUBJECT KIND — everything a shell or interpreter will run.
@@ -875,6 +894,15 @@ export const claudeCodeAdapter: HarnessAdapter = {
     return policy.rules.map((r) => {
       const layers: string[] = [];
       const kinds: LayerKind[] = [];
+      if (r.disposition === "open") {
+        // An open rule surfaces a message and lets the call through — advisory,
+        // not a wall. Report it as such and never among the blocking layers.
+        return {
+          rule: r.id,
+          layers: hookLive ? ["hook notice (advisory, does not block)"] : [],
+          kinds: [],
+        };
+      }
       const targets = r.denyRead.map(denyRuleFor);
       const denyHeld =
         targets.length > 0 && targets.every((t) => deny.includes(t));

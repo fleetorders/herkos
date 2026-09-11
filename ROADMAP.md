@@ -41,6 +41,10 @@ than left to rot. What exists today is described in the README, not here.
 
 ## Next
 
+- Open rule class and an advisory disposition — **done**: a rule carries its own
+  class label and message, and `disposition: "open"` surfaces a notice instead of
+  blocking, so approval-gated rules ("never push without asking") can be
+  expressed truthfully.
 - More baseline rule classes, added slowly and only when near-universally
   never-legitimate (candidate: tamper-detection of agent instruction files).
 - Managed/organisation policy: compile the never-list into each harness's

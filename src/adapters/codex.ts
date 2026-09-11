@@ -565,6 +565,15 @@ export const codexAdapter: HarnessAdapter = {
     return policy.rules.map((r) => {
       const layers: string[] = [];
       const kinds: LayerKind[] = [];
+      if (r.disposition === "open") {
+        return {
+          rule: r.id,
+          layers: hookLive
+            ? ["hook notice (advisory, after '/hooks' trust)"]
+            : [],
+          kinds: [],
+        };
+      }
       const source = effective.rules.find((x) => x.id === r.id);
       if (profileLive && (source?.codexDeny ?? []).length > 0) {
         layers.push("permission profile (OS deny)");

@@ -1,5 +1,6 @@
 export {
   BASELINE,
+  BASELINE_CLASSES,
   loadEffectivePolicy,
   loadValidatedPolicy,
   validatePolicy,
@@ -15,6 +16,7 @@ export { HERKOS_VERSION } from "./version.js";
 export type {
   Rule,
   RuleClass,
+  Disposition,
   UserPolicy,
   EffectivePolicy,
   CompiledPolicy,

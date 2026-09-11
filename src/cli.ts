@@ -254,9 +254,16 @@ function rulesCmd(): void {
     const src = BASELINE.some((b) => b.id === r.id)
       ? pc.dim("[baseline]")
       : pc.cyan("[user]");
+    const disp =
+      r.disposition === "open"
+        ? pc.yellow(" [open — notice, does not block]")
+        : "";
     process.stdout.write(
-      `  ${src} ${pc.bold(r.id)} (${r.class}) — ${r.description}\n`,
+      `  ${src} ${pc.bold(r.id)} (${r.class})${disp} — ${r.description}\n`,
     );
+    if (r.message) {
+      process.stdout.write(`      ${pc.dim(`message: ${r.message}`)}\n`);
+    }
     const targets = denyReadTargets(r);
     if (targets.length > 0) {
       process.stdout.write(
