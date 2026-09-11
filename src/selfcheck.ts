@@ -139,7 +139,9 @@ export function runSelfCheck(): {
   jq: boolean;
 } {
   const effective = loadEffectivePolicy();
-  const policy = compile(effective);
+  // The synthetic payloads must never land in the user's blocked-call log:
+  // a record of refusals is only evidence if every line is a real call.
+  const policy = { ...compile(effective), logFile: "" };
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "herkos-selfcheck-"));
   const script = path.join(tmp, "hook.sh");
   fs.writeFileSync(script, generateHook(policy), { mode: 0o755 });

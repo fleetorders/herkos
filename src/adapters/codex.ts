@@ -26,6 +26,7 @@ import type {
   WireResult,
   VerifyResult,
   RuleCoverage,
+  LayerKind,
 } from "./types.js";
 import {
   generateHook,
@@ -306,6 +307,7 @@ function wireHook(): void {
 export const codexAdapter: HarnessAdapter = {
   id: "codex",
   name: "Codex CLI",
+  hookScope: "shell-commands",
 
   detect(): DetectResult {
     const r = spawnSync(codexBin(), ["--version"], {
@@ -540,17 +542,21 @@ export const codexAdapter: HarnessAdapter = {
     const effective = loadEffectivePolicy();
     return policy.rules.map((r) => {
       const layers: string[] = [];
+      const kinds: LayerKind[] = [];
       const source = effective.rules.find((x) => x.id === r.id);
       if (profileLive && (source?.codexDeny ?? []).length > 0) {
         layers.push("permission profile (OS deny)");
+        kinds.push("os-sandbox");
       }
       if (prefixLive && r.commandPrefixes.length > 0) {
         layers.push("execpolicy forbidden rules (no trust step)");
+        kinds.push("prefix-rule");
       }
       if (hookLive && (r.pathRegex !== "" || r.commandRegexes.length > 0)) {
         layers.push("hook on shell commands (after '/hooks' trust)");
+        kinds.push("hook");
       }
-      return { rule: r.id, layers };
+      return { rule: r.id, layers, kinds };
     });
   },
 };

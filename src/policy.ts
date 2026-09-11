@@ -39,6 +39,14 @@ export interface Rule {
    */
   commandPrefixes?: string[][];
   /**
+   * Examples the rule must match — commands or paths, checked by `validate`
+   * with the same evaluator the hook uses. A rule that stops matching its own
+   * example is caught before it is wired, not after it silently fails.
+   */
+  match?: string[];
+  /** Examples the rule must NOT match: the legitimate calls it must leave alone. */
+  notMatch?: string[];
+  /**
    * Concrete deny targets for OS-level filesystem-deny adapters (Codex permission
    * profiles). Home/absolute paths ("~/.ssh", "/etc/x") go in the filesystem
    * table; glob entries (containing "*", e.g. "**\/.env*") go under
@@ -175,8 +183,12 @@ export const BASELINE: Rule[] = [
     class: "fetched-exec",
     description: "Piping downloaded content directly into a shell",
     commandPatterns: [
-      "(curl|wget)[^|]*\\|[[:space:]]*(env[[:space:]]+)?(ba|z|da)?sh([[:space:]]|$|[[:space:]]*-)",
+      "(curl|wget)[^|]*\\|[[:space:]]*(sudo([[:space:]]+-[[:alnum:]]+)*[[:space:]]+)?(env[[:space:]]+)?(ba|z|da)?sh([[:space:]]|$|[[:space:]]*-)",
       "eval[[:space:]]+.?\\$\\((curl|wget)",
+      // Same intent, no pipe: process substitution, and the download handed
+      // to a shell as a string. Found by the bypass corpus.
+      "(^|[^[:alnum:]_.-])((ba|z|da)?sh|source|\\.)[[:space:]]+<\\([[:space:]]*(curl|wget)",
+      "(^|[^[:alnum:]_.-])(ba|z|da)?sh[[:space:]]+-c[[:space:]]+[\"']?\\$\\([[:space:]]*(curl|wget)",
     ],
   },
 ];
@@ -246,6 +258,8 @@ const KNOWN_RULE_KEYS: readonly string[] = [
   "paths",
   "commandPatterns",
   "commandPrefixes",
+  "match",
+  "notMatch",
   "codexDeny",
   "denyRead",
 ];
@@ -336,6 +350,49 @@ function checkPrefixes(rid: string, prefixes: unknown, errors: string[]): void {
   });
 }
 
+/** Does this rule match the text, by the hook's own evaluator (`grep -E`)? */
+function ruleMatches(rule: Rule, text: string): boolean {
+  const paths = rule.paths ?? [];
+  const regexes = [
+    ...(paths.length > 0 ? [paths.map(escapeERE).join("|")] : []),
+    ...((rule.commandPatterns ?? []).length > 0
+      ? (rule.commandPatterns ?? [])
+      : (rule.commandPrefixes ?? []).map(prefixRegex)),
+  ];
+  return regexes.some(
+    (re) =>
+      spawnSync("grep", ["-E", "-q", "-e", re], {
+        input: text,
+        encoding: "utf8",
+        timeout: 5_000,
+      }).status === 0,
+  );
+}
+
+/** Run a rule's `match` / `notMatch` examples against the rule itself. */
+function checkExamples(rid: string, rule: Rule, errors: string[]): void {
+  const sets: [key: "match" | "notMatch", want: boolean][] = [
+    ["match", true],
+    ["notMatch", false],
+  ];
+  for (const [key, want] of sets) {
+    const list: unknown = rule[key];
+    if (list === undefined) continue;
+    if (!Array.isArray(list) || !list.every((x) => typeof x === "string")) {
+      errors.push(`rule ${rid}: ${key} must be a list of strings`);
+      continue;
+    }
+    list.forEach((example: string, i) => {
+      if (ruleMatches(rule, example) === want) return;
+      errors.push(
+        want
+          ? `rule ${rid}: match example ${i + 1} (${JSON.stringify(example)}) is not matched by the rule`
+          : `rule ${rid}: notMatch example ${i + 1} (${JSON.stringify(example)}) is matched by the rule — that call would be refused`,
+      );
+    });
+  }
+}
+
 /** Validate an effective policy: errors block wiring; warnings just inform. */
 export function validatePolicy(policy: EffectivePolicy): ValidationResult {
   const errors: string[] = [];
@@ -370,10 +427,13 @@ export function validatePolicy(policy: EffectivePolicy): ValidationResult {
       );
     }
     checkPrefixes(rid, rule.commandPrefixes, errors);
+    const beforeMatchers = errors.length;
     checkEntries(rid, "paths", rule.paths, errors);
     checkEntries(rid, "commandPatterns", rule.commandPatterns, errors);
     checkEntries(rid, "codexDeny", rule.codexDeny, errors);
     checkEntries(rid, "denyRead", rule.denyRead, errors);
+    // Examples only mean something once the rule's own matchers are valid.
+    if (errors.length === beforeMatchers) checkExamples(rid, rule, errors);
     // Unknown keys only matter for user rules — the baseline is ours.
     if (!BASELINE.some((b) => b === raw)) {
       for (const k of Object.keys(raw)) {

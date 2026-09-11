@@ -23,6 +23,7 @@ import type {
   WireResult,
   VerifyResult,
   RuleCoverage,
+  LayerKind,
 } from "./types.js";
 
 const HOOK_MARK = "herkos-hook";
@@ -561,6 +562,7 @@ function isOurs(entry: SettingsHookEntry): boolean {
 export const claudeCodeAdapter: HarnessAdapter = {
   id: "claude-code",
   name: "Claude Code",
+  hookScope: "every-tool",
 
   detect(): DetectResult {
     const r = spawnSync("claude", ["--version"], {
@@ -828,6 +830,7 @@ export const claudeCodeAdapter: HarnessAdapter = {
     const hookLive = hookRegistered && fs.existsSync(hookPath());
     return policy.rules.map((r) => {
       const layers: string[] = [];
+      const kinds: LayerKind[] = [];
       const targets = r.denyRead.map(denyRuleFor);
       const denyHeld =
         targets.length > 0 && targets.every((t) => deny.includes(t));
@@ -839,12 +842,17 @@ export const claudeCodeAdapter: HarnessAdapter = {
       // and its children; it only exists while the user has it switched on.
       if (sandboxOn && (denyHeld || filesHeld)) {
         layers.push("OS sandbox for shell commands");
+        kinds.push("os-sandbox");
       }
-      if (denyHeld) layers.push("permission deny rules");
+      if (denyHeld) {
+        layers.push("permission deny rules");
+        kinds.push("permission-deny");
+      }
       if (hookLive && (r.pathRegex !== "" || r.commandRegexes.length > 0)) {
         layers.push("hook on every tool");
+        kinds.push("hook");
       }
-      return { rule: r.id, layers };
+      return { rule: r.id, layers, kinds };
     });
   },
 

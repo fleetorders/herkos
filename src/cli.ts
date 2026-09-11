@@ -12,6 +12,8 @@ import type { ValidationResult } from "./policy.js";
 import { ADAPTERS, detectInstalled } from "./adapters/index.js";
 import { runSelfCheck, jqAvailable } from "./selfcheck.js";
 import { readBlockLog, summariseBlocks } from "./blocklog.js";
+import { runBypassCorpus } from "./corpus.js";
+import type { CorpusResult, HarnessView } from "./corpus.js";
 
 function printValidation(v: ValidationResult): void {
   for (const e of v.errors)
@@ -137,8 +139,67 @@ function statusCmd(): void {
   }
 }
 
+/**
+ * The corpus report: the hook's verdict on each case is measured; the native
+ * layers are credited only as each harness documents them and only where they
+ * are wired here, and a case no wired layer holds is named, never hidden.
+ */
+function printCorpus(results: CorpusResult[]): void {
+  const ran = results.filter((r) => !r.skipped).length;
+  process.stdout.write(
+    `\nbypass corpus — ${ran} case(s). The hook's verdict is measured here; other layers are credited as each harness documents them, and only where wired on this machine.\n`,
+  );
+  for (const r of results) {
+    if (r.skipped) {
+      process.stdout.write(`  ${pc.dim("skip")} ${r.case.id} — ${r.skipped}\n`);
+      continue;
+    }
+    let hook: string;
+    if (r.gotHook === "error") hook = "the hook errored";
+    else if (r.case.benign)
+      hook =
+        r.gotHook === "pass"
+          ? "allowed, as it must be"
+          : "REFUSED a benign call";
+    else if (r.gotHook === "block") hook = "hook blocks";
+    else
+      hook =
+        r.case.hook === "pass"
+          ? "hook passes (known gap)"
+          : "hook passes — REGRESSION";
+    const per = r.harnesses
+      .filter((h) => h.verdict !== "n/a")
+      .map((h) =>
+        h.verdict === "held"
+          ? `${h.name}: held by ${h.by.join(" + ")}`
+          : `${h.name}: ${pc.yellow("UNGUARDED")}`,
+      )
+      .join(" · ");
+    process.stdout.write(
+      `  ${r.ok ? pc.green("ok  ") : pc.red("FAIL")} ${r.case.id} — ${hook}${per ? ` · ${per}` : ""}\n`,
+    );
+  }
+  const names = [
+    ...new Set(results.flatMap((r) => r.harnesses.map((h) => h.name))),
+  ];
+  for (const n of names) {
+    const open = results
+      .filter((r) =>
+        r.harnesses.some((h) => h.name === n && h.verdict === "unguarded"),
+      )
+      .map((r) => r.case.id);
+    if (open.length > 0) {
+      process.stdout.write(
+        `  ${pc.yellow(`${n}: ${open.length} case(s) no wired layer holds on this machine:`)} ${open.join(", ")}\n`,
+      );
+    }
+  }
+}
+
 function checkCmd(): void {
-  const v = validatePolicy(loadEffectivePolicy());
+  const effective = loadEffectivePolicy();
+  const compiled = compile(effective);
+  const v = validatePolicy(effective);
   printValidation(v);
   const s = runSelfCheck();
   // A policy that fails validation is not enforced as written: a rule grep
@@ -155,6 +216,7 @@ function checkCmd(): void {
       `  ${r.ok ? pc.green("ok  ") : pc.red("FAIL")} ${r.name}${r.ok ? "" : ` (want exit ${r.wantExit}, got ${r.gotExit})`}\n`,
     );
   }
+  const views: HarnessView[] = [];
   for (const a of ADAPTERS) {
     const d = a.detect();
     if (d.installed) {
@@ -162,8 +224,18 @@ function checkCmd(): void {
       process.stdout.write(
         `  ${v.ok ? pc.green("ok  ") : pc.yellow("warn")} ${a.name} wiring: ${v.detail}\n`,
       );
+      if (a.coverage) {
+        views.push({
+          name: a.name,
+          hookScope: a.hookScope ?? "shell-commands",
+          coverage: a.coverage(compiled),
+        });
+      }
     }
   }
+  const corpus = runBypassCorpus(compiled, effective, views);
+  printCorpus(corpus);
+  if (corpus.some((r) => !r.ok)) s.ok = false;
   process.stdout.write(
     s.ok
       ? pc.green("\nPASS — the never-list is enforced\n")

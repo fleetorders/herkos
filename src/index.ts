@@ -28,7 +28,15 @@ export type {
   WireResult,
   VerifyResult,
   RuleCoverage,
+  LayerKind,
 } from "./adapters/types.js";
+export { CORPUS, LAYER_KINDS, runBypassCorpus } from "./corpus.js";
+export type {
+  BypassCase,
+  CorpusResult,
+  HarnessView,
+  HarnessVerdict,
+} from "./corpus.js";
 export { codexRulesFile, codexRulesPath } from "./adapters/codex.js";
 export {
   generateHook,

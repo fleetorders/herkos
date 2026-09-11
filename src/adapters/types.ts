@@ -37,6 +37,17 @@ export interface VerifyResult {
   detail: string;
 }
 
+/**
+ * The kinds of enforcement layer a harness can offer. Harness-agnostic, so a
+ * case in the bypass corpus can say which kind holds it and each harness can
+ * say whether it has that kind wired.
+ */
+export type LayerKind =
+  | "hook"
+  | "permission-deny"
+  | "os-sandbox"
+  | "prefix-rule";
+
 /** Which of a harness's enforcement layers hold one rule right now. */
 export interface RuleCoverage {
   rule: string;
@@ -45,6 +56,8 @@ export interface RuleCoverage {
    * first. Empty means the rule is NOT enforced here, which `status` says out loud.
    */
   layers: string[];
+  /** The same layers by kind, for comparing across harnesses. */
+  kinds: LayerKind[];
 }
 
 export interface HarnessAdapter {
@@ -52,6 +65,11 @@ export interface HarnessAdapter {
   id: string;
   /** Human name for output. */
   name: string;
+  /**
+   * Which tool calls reach this harness's hook: every tool, or shell commands
+   * only. Absent is read as shell commands only — the narrower claim.
+   */
+  hookScope?: "every-tool" | "shell-commands";
   detect(): DetectResult;
   wire(policy: CompiledPolicy): WireResult;
   unwire(): WireResult;

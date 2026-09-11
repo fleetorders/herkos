@@ -128,6 +128,34 @@ is on by default; set `"log": false` in the policy to turn it off. Writing it is
 best effort: a log that cannot be written never turns a block into an allow. It
 rotates past 1 MiB, and `uninstall` leaves it in place with your policy.
 
+## Proof against other spellings
+
+A PASS that only shows the script runs proves little. `herkos check` also runs a
+**bypass corpus**: each baseline rule attacked by other spellings — a glob in
+place of a file name, a `cd` then a relative read, a symlink, a path built at run
+time, a vendor CLI reading the file itself, fetched code through `sudo` or
+process substitution — plus benign calls that must never be refused. For every
+case it measures the hook's verdict, credits the native layers (deny rules, OS
+sandbox, prefix rules) only where they are wired on your machine, and names each
+case nothing wired holds as **UNGUARDED**. Two gaps are recorded rather than
+papered over, because one text pattern cannot tell them from everyday use:
+downloading a script to a file and then running it, and piping a download to an
+interpreter.
+
+Your own rules can carry examples, which `validate` runs with the hook's own
+evaluator before anything is wired:
+
+```json
+{
+  "id": "no-force-push",
+  "class": "fetched-exec",
+  "description": "Force-pushing over shared history",
+  "commandPrefixes": [["git", "push", "--force"]],
+  "match": ["git push --force origin main"],
+  "notMatch": ["git push origin main", "git push --force-with-lease"]
+}
+```
+
 ## What it is NOT
 
 - **Not a sandbox.** OS-level containment is the platforms' job and they do it
