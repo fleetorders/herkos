@@ -17,6 +17,7 @@ import { spawnSync } from "node:child_process";
 import { blockLogFile, compile, loadEffectivePolicy } from "../policy.js";
 import type { CompiledPolicy, CompiledRule } from "../policy.js";
 import { COMMAND_KEYS, KNOWN_TOOLS, PATH_KEYS } from "../matchers.js";
+import { EXTRACT_AWK } from "../extract.js";
 import type {
   HarnessAdapter,
   DetectResult,
@@ -337,6 +338,7 @@ STAMP=${shQuote(stampOf(policy))}
 PATH_KEYS=${shList(PATH_KEYS)}
 COMMAND_KEYS=${shList(COMMAND_KEYS)}
 KNOWN_TOOLS=${shList(KNOWN_TOOLS)}
+EXTRACT_AWK=${shQuote(EXTRACT_AWK)}
 LOG_FILE=${shQuote(policy.logFile)}
 LOG_MAX_BYTES=${LOG_MAX_BYTES}
 TOOL=""
@@ -420,30 +422,41 @@ if [ "\${1:-}" = "--selftest" ]; then
   exit 0
 fi
 
-IN=$(cat 2>/dev/null) || exit 0
-command -v jq >/dev/null 2>&1 || {
-  printf 'herkos DEGRADED: jq unavailable — never-list enforcement is OFF for this call. Install jq to restore.\\n' >&2
+command -v awk >/dev/null 2>&1 || {
+  printf 'herkos DEGRADED: awk unavailable — never-list enforcement is OFF for this call.\\n' >&2
   exit 0
 }
 
-TOOL=$(printf '%s' "$IN" | jq -r '.tool_name // ""' 2>/dev/null)
+# One awk pass over the payload (see extract.ts): the tool name, every string
+# under a command- or path-shaped key at any depth, the argument count, and E
+# when the payload cannot be read. awk and grep are POSIX; nothing else is needed.
+FIELDS=$(awk -v pkeys="$PATH_KEYS" -v ckeys="$COMMAND_KEYS" "$EXTRACT_AWK" 2>/dev/null)
+AWK_RC=$?
 
-# values KEYS — every non-empty string held under one of KEYS, at any depth of
-# tool_input, one per line (array elements individually). Reading by argument
-# NAME rather than by tool name is what lets a tool-server tool that takes a
-# path be checked without herkos having heard of it.
-values() {
-  printf '%s' "$IN" | jq -r --arg keys "$1" '
-    ($keys | split(" ")) as $k
-    | [ (.tool_input // {}) | .. | objects | to_entries[]
-        | select(.key as $n | $k | index($n)) | .value
-        | if type == "array" then .[] else . end
-        | select(type == "string" and length > 0) ]
-    | unique | .[]' 2>/dev/null
-}
-
-COMMAND_VALUES=$(values "$COMMAND_KEYS")
-PATH_VALUES=$(values "$PATH_KEYS")
+TAB=$(printf '\\t')
+NL='
+'
+TOOL=""
+COMMAND_VALUES=""
+PATH_VALUES=""
+NARGS=0
+PARSE_ERROR=""
+while IFS= read -r line; do
+  tag=\${line%%"$TAB"*}
+  val=\${line#*"$TAB"}
+  case "$tag" in
+    T) [ -n "$TOOL" ] || TOOL=$val ;;
+    C) COMMAND_VALUES="$COMMAND_VALUES$val$NL" ;;
+    P) PATH_VALUES="$PATH_VALUES$val$NL" ;;
+    N) NARGS=$val ;;
+    E) PARSE_ERROR=$val ;;
+  esac
+done <<HERKOS_FIELDS
+$FIELDS
+HERKOS_FIELDS
+if [ "$AWK_RC" -ne 0 ] && [ -z "$PARSE_ERROR" ]; then
+  PARSE_ERROR="the extractor exited $AWK_RC"
+fi
 
 # Split on newlines only, in THIS shell (not a pipeline subshell), so a block's
 # exit 2 ends the hook rather than a subshell. Pathname expansion is OFF while
@@ -458,6 +471,13 @@ for v in $PATH_VALUES; do path_rules "$v" "$TOOL path"; done
 set +f
 IFS=$OLD_IFS
 
+# Whatever was read has been checked, so a matched rule still blocked above.
+# Past that, a payload that could not be read is announced, never assumed safe.
+if [ -n "$PARSE_ERROR" ]; then
+  printf 'herkos DEGRADED: could not read this tool call (%s) — enforcement is OFF for the rest of this call.\\n' "$PARSE_ERROR" >&2
+  exit 0
+fi
+
 # Honest coverage: a tool herkos does not know, whose arguments carry none of
 # the names it reads, is UNCOVERED — it may touch anything, and herkos cannot
 # see what. Say so; never assume it is safe. Known tools that take no path stay
@@ -466,7 +486,6 @@ if [ -z "$COMMAND_VALUES" ] && [ -z "$PATH_VALUES" ] && [ -n "$TOOL" ]; then
   case " $KNOWN_TOOLS " in
     *" $TOOL "*) ;;
     *)
-      NARGS=$(printf '%s' "$IN" | jq -r '(.tool_input // {}) | if type == "object" then (keys | length) else 0 end' 2>/dev/null)
       case "$NARGS" in
         ''|0) ;;
         *) printf "herkos UNCOVERED: tool %s passed arguments herkos cannot read as a path or a command — the never-list was NOT checked for this call.\\n" "$TOOL" >&2 ;;

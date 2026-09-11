@@ -25,6 +25,9 @@ than left to rot. What exists today is described in the README, not here.
   hook measured and native layers credited where wired; rule `match` /
   `notMatch` examples run by `validate`. Open: two recorded gaps (download then
   run; download piped to an interpreter).
+- An enforcement path that depends on nothing — **done**: the hook reads its
+  payload with a POSIX awk extractor; no jq, and an unreadable payload is
+  announced instead of passing in silence.
 - Adapters for more harnesses (the policy is harness-agnostic; each is a new
   adapter behind the shared interface).
 - A guided `herkos init` that reports, per harness, exactly what it can and

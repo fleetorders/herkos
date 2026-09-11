@@ -52,7 +52,8 @@ export {
   ownedSettingsPath,
   blockLogPath,
 } from "./adapters/claude-code.js";
-export { runSelfCheck, syntaxCheck, jqAvailable, CASES } from "./selfcheck.js";
+export { runSelfCheck, syntaxCheck, awkAvailable, CASES } from "./selfcheck.js";
+export { EXTRACT_AWK } from "./extract.js";
 export type { CheckResult, CheckCase } from "./selfcheck.js";
 export { readBlockLog, summariseBlocks } from "./blocklog.js";
 export type { BlockEntry, BlockSummary } from "./blocklog.js";

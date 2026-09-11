@@ -105,9 +105,12 @@ export interface CheckResult {
   gotExit: number;
 }
 
-/** Is jq (the hook's payload parser) installed? Its absence is the documented degradation. */
-export function jqAvailable(): boolean {
-  return spawnSync("command", ["-v", "jq"], { shell: true }).status === 0;
+/**
+ * Is awk installed? The hook reads its payload with awk, a POSIX utility every
+ * system and minimal image ships; its absence is the documented degradation.
+ */
+export function awkAvailable(): boolean {
+  return spawnSync("command", ["-v", "awk"], { shell: true }).status === 0;
 }
 
 /**
@@ -136,7 +139,7 @@ export function syntaxCheck(script: string): { ok: boolean; detail: string } {
 export function runSelfCheck(): {
   results: CheckResult[];
   ok: boolean;
-  jq: boolean;
+  awk: boolean;
 } {
   const effective = loadEffectivePolicy();
   // The synthetic payloads must never land in the user's blocked-call log:
@@ -145,7 +148,7 @@ export function runSelfCheck(): {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "herkos-selfcheck-"));
   const script = path.join(tmp, "hook.sh");
   fs.writeFileSync(script, generateHook(policy), { mode: 0o755 });
-  const jq = jqAvailable();
+  const awk = awkAvailable();
   const disabled = new Set(effective.disabled);
 
   const syn = syntaxCheck(script);
@@ -177,5 +180,5 @@ export function runSelfCheck(): {
     });
   }
   fs.rmSync(tmp, { recursive: true, force: true });
-  return { results, ok: results.every((r) => r.ok), jq };
+  return { results, ok: results.every((r) => r.ok), awk };
 }

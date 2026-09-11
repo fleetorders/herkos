@@ -10,7 +10,7 @@ import {
 } from "./policy.js";
 import type { ValidationResult } from "./policy.js";
 import { ADAPTERS, detectInstalled } from "./adapters/index.js";
-import { runSelfCheck, jqAvailable } from "./selfcheck.js";
+import { runSelfCheck, awkAvailable } from "./selfcheck.js";
 import { readBlockLog, summariseBlocks } from "./blocklog.js";
 import { runBypassCorpus } from "./corpus.js";
 import type { CorpusResult, HarnessView } from "./corpus.js";
@@ -38,10 +38,10 @@ function initCmd(opts: { dryRun?: boolean }): void {
     `herkos — compiling ${policy.ruleCount} rules into installed harnesses\n`,
   );
   printValidation(v);
-  if (!jqAvailable()) {
+  if (!awkAvailable()) {
     process.stdout.write(
       pc.yellow(
-        "jq not installed — the generated hook will announce enforcement OFF on every call until jq is installed\n",
+        "awk not found — the generated hook will announce enforcement OFF on every call until awk is available\n",
       ),
     );
   }
@@ -206,7 +206,7 @@ function checkCmd(): void {
   // rejects is off at run time. That is a FAIL, not a warning.
   if (v.errors.length) s.ok = false;
   process.stdout.write(
-    `herkos check — ${s.results.length} enforcement cases${s.jq ? "" : pc.yellow(" (warning: jq not installed — the live hook degrades to allow)")}\n`,
+    `herkos check — ${s.results.length} enforcement cases${s.awk ? "" : pc.yellow(" (warning: awk not found — the live hook degrades to allow)")}\n`,
   );
   process.stdout.write(
     `  ${v.errors.length ? pc.red("FAIL") : pc.green("ok  ")} policy validates${v.errors.length ? ` (${v.errors.length} error(s) — run 'herkos validate')` : ""}\n`,

@@ -46,7 +46,7 @@ herkos is **harness-agnostic at the policy layer** (one never-list) but delivers
 enforcement through each harness's own extension point, so how much it can
 enforce depends on what the harness exposes:
 
-- **Claude Code — full enforcement.** herkos installs a small, self-contained
+- **Claude Code — full enforcement.** herkos installs a small, self-contained (POSIX `sh`, `awk` and `grep`, nothing else)
   shell hook on `PreToolUse` that blocks both rule classes on every tool call, in
   every mode (including headless / skip-permissions). The hook matches **every
   tool**, including tool-server (MCP) tools you add later, and reads arguments by
