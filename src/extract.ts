@@ -15,6 +15,11 @@
  *   N<TAB>count       how many keys tool_input has directly
  *   E<TAB>reason      the payload could not be read (records before it still count)
  *
+ * A tool_input that is present but not an object (an array, a string, a bare
+ * literal) emits E rather than nothing: the argument vocabularies are keyed by
+ * NAME, so a container without names cannot be read — it is announced, never
+ * assumed safe.
+ *
  * A value holding newlines becomes several records with the same tag, so every
  * line of a multi-line command is checked. Array elements are read one by one,
  * nested arrays included. Every copy of a duplicated key is read — a
@@ -38,6 +43,7 @@ BEGIN {
   for (i = 1; i <= n; i++) CK[tmp[i]] = 1
   HEX = "0123456789abcdef"
   openRec = 0
+  badInput = 0
 }
 { doc = doc $0 "\n" }
 END {
@@ -52,6 +58,7 @@ END {
       owner = ""
       if (d > 0) owner = (ctype[d] == "o") ? curkey[d] : ckey[d]
       root = (d == 1 && ctype[1] == "o" && curkey[1] == "tool_input" && c == "{")
+      if (d == 1 && ctype[1] == "o" && curkey[1] == "tool_input" && c == "[") badInput = 1
       inner = (d > 0 && inInput[d])
       d++
       ctype[d] = (c == "{") ? "o" : "a"
@@ -80,6 +87,7 @@ END {
         if (isRoot[d]) nkeys[d]++
         continue
       }
+      if (d == 1 && ctype[1] == "o" && curkey[1] == "tool_input") badInput = 1
       tag = ""
       if (d == 1 && ctype[1] == "o" && curkey[1] == "tool_name") { tag = "T"; sawTool = 1 }
       else if (d >= 2 && inInput[d]) {
@@ -90,11 +98,16 @@ END {
       readstr(tag == "" ? 0 : 2, tag)
       continue
     }
-    if (match(substr(s, pos, 64), /^[-+.0-9A-Za-z]+/)) { pos += RLENGTH; continue }
+    if (match(substr(s, pos, 64), /^[-+.0-9A-Za-z]+/)) {
+      if (d == 1 && ctype[1] == "o" && curkey[1] == "tool_input") badInput = 1
+      pos += RLENGTH
+      continue
+    }
     fail("unexpected character")
   }
   if (!failed && d != 0) fail("truncated payload")
   if (!failed && !sawTool) fail("no tool_name")
+  if (!failed && badInput) fail("tool_input is not an object")
 }
 function fail(m) {
   if (failed) return

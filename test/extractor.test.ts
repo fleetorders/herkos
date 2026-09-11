@@ -131,6 +131,36 @@ describe("a payload it cannot read", () => {
     const raw = `{"tool_name":"Bash","tool_input":{"command":${JSON.stringify(FETCHED)},"x":`;
     expect(fireHook(hook, raw).exit).toBe(2);
   });
+
+  it("announces a tool_input that is an array, instead of reading it as nothing", () => {
+    // Only reachable if a harness violates its own payload contract — but a
+    // payload that could not be read is announced, never assumed safe.
+    const r = fireHook(
+      hook,
+      '{"tool_name":"mcp_unknown","tool_input":["a","b"]}',
+    );
+    expect(r.exit).toBe(0);
+    expect(r.stderr).toContain("DEGRADED");
+    expect(r.stderr).toContain("tool_input is not an object");
+  });
+
+  it("announces a tool_input that is a bare string or literal", () => {
+    for (const raw of [
+      '{"tool_name":"X","tool_input":"cat x"}',
+      '{"tool_name":"X","tool_input":42}',
+      '{"tool_name":"X","tool_input":null}',
+    ]) {
+      const r = fireHook(hook, raw);
+      expect(r.exit).toBe(0);
+      expect(r.stderr).toContain("tool_input is not an object");
+    }
+  });
+
+  it("still reads an array under a named key INSIDE tool_input (only the top level must be an object)", () => {
+    expect(
+      fireHook(hook, call("mcp__x__y", { args: ["echo", FETCHED] })).exit,
+    ).toBe(2);
+  });
 });
 
 describe("large payloads", () => {
