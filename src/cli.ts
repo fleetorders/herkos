@@ -10,6 +10,7 @@ import {
 } from "./policy.js";
 import type { ValidationResult } from "./policy.js";
 import { ADAPTERS, detectInstalled } from "./adapters/index.js";
+import type { WireResult } from "./adapters/types.js";
 import { runSelfCheck, awkAvailable } from "./selfcheck.js";
 import { readBlockLog, summariseBlocks } from "./blocklog.js";
 import { runBypassCorpus } from "./corpus.js";
@@ -60,7 +61,20 @@ function initCmd(opts: { dryRun?: boolean }): void {
       );
       continue;
     }
-    const r = a.wire(policy);
+    let r: WireResult;
+    try {
+      r = a.wire(policy);
+    } catch (e) {
+      // A refusal from the adapter (e.g. harness settings of a shape herkos
+      // cannot merge into) is a diagnosis, not a stack trace — and nothing
+      // was written for that harness.
+      process.stdout.write(
+        pc.red(
+          `herkos: could not wire ${a.name}: ${(e as Error).message}\n`,
+        ),
+      );
+      process.exit(1);
+    }
     process.stdout.write(`  ${pc.green("wired")} ${a.name}: ${r.detail}\n`);
   }
   if (!opts.dryRun)

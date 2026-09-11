@@ -247,6 +247,51 @@ function settingsPath(configDir: string): string {
   return path.join(configDir, "settings.json");
 }
 
+/** "a boolean" / "an array" / "null" — for messages about a wrong-shape value. */
+function describeValue(v: unknown): string {
+  if (Array.isArray(v)) return "an array";
+  if (v === null) return "null";
+  return `a ${typeof v}`;
+}
+
+/**
+ * Read the harness settings and refuse anything herkos cannot merge into
+ * safely: a file that is not valid JSON, a top level that is not an object, or
+ * a `hooks`/`permissions`/`sandbox` that is not an object. Blindly casting the
+ * latter crashed wire() mid-write — after the hook file was written but before
+ * it was registered — leaving a stack trace and a half-applied install; this
+ * gate runs BEFORE anything is written, so a refused init writes nothing.
+ */
+function readSettingsForWire(
+  sp: string,
+): { settings: Record<string, unknown>; existed: boolean } {
+  if (!fs.existsSync(sp)) return { settings: {}, existed: false };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(sp, "utf8"));
+  } catch (e) {
+    throw new Error(
+      `${sp} is not valid JSON (${String((e as Error).message)}) — fix or remove it, then re-run 'herkos init'`,
+    );
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(
+      `${sp} holds ${describeValue(parsed)}, not a JSON object — fix or remove it, then re-run 'herkos init'`,
+    );
+  }
+  const settings = parsed as Record<string, unknown>;
+  for (const key of ["hooks", "permissions", "sandbox"]) {
+    const v: unknown = settings[key];
+    if (v === undefined) continue;
+    if (typeof v !== "object" || v === null || Array.isArray(v)) {
+      throw new Error(
+        `your settings.json has '${key}' as ${describeValue(v)} — herkos cannot merge into that; fix or remove it, then re-run 'herkos init'`,
+      );
+    }
+  }
+  return { settings, existed: true };
+}
+
 export function detectConfigDir(): string {
   return process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
 }
@@ -634,18 +679,17 @@ export const claudeCodeAdapter: HarnessAdapter = {
     const configDir = detectConfigDir();
     const sp = settingsPath(configDir);
 
-    // 1. The generated hook, owned by herkos in its own directory.
+    // 1. Read the settings and refuse a shape herkos cannot merge into —
+    //    BEFORE anything is written, so a refused init is a clean no-op.
+    const { settings, existed } = readSettingsForWire(sp);
+
+    // 2. The generated hook, owned by herkos in its own directory.
     fs.mkdirSync(herkosDir(), { recursive: true });
     fs.writeFileSync(hookPath(), generateHook(policy), { mode: 0o755 });
     changed.push(hookPath());
 
-    // 2. Wire it into settings.json (create the file if the harness has none yet).
-    let settings: Record<string, unknown> = {};
-    if (fs.existsSync(sp)) {
-      settings = JSON.parse(fs.readFileSync(sp, "utf8")) as Record<
-        string,
-        unknown
-      >;
+    // 3. Wire it into settings.json (create the file if the harness has none yet).
+    if (existed) {
       const bak = `${sp}.herkos-bak`;
       if (!fs.existsSync(bak)) {
         fs.copyFileSync(sp, bak); // one pre-herkos backup, never overwritten
@@ -665,7 +709,7 @@ export const claudeCodeAdapter: HarnessAdapter = {
     pre.push({ matcher: "*", hooks: [{ type: "command", command: cmd }] });
     hooks["PreToolUse"] = pre;
 
-    // 3. The session-start proof, and the policy snapshot it compares against.
+    // 4. The session-start proof, and the policy snapshot it compares against.
     fs.writeFileSync(
       policySnapshotPath(),
       fs.existsSync(policy.userPolicyPath)
@@ -687,7 +731,7 @@ export const claudeCodeAdapter: HarnessAdapter = {
     });
     hooks["SessionStart"] = start;
 
-    // 4. Credential reads as the harness's own permission deny rules.
+    // 5. Credential reads as the harness's own permission deny rules.
     const owned = readOwned();
     const rawPerms = settings["permissions"];
     const hadPerms = typeof rawPerms === "object" && rawPerms !== null;
@@ -718,7 +762,7 @@ export const claudeCodeAdapter: HarnessAdapter = {
     settings["permissions"] = permissions;
     tidyPermissions(settings, nowOwned);
 
-    // 5. Credential files into the OS sandbox's own credential list. Turning the
+    // 6. Credential files into the OS sandbox's own credential list. Turning the
     //    sandbox on is the user's call: herkos writes the entries and never
     //    touches `sandbox.enabled`. The entries are inert while it is off and
     //    hold from the first command once it is on.
