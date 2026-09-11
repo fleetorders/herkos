@@ -132,6 +132,10 @@ is on by default; set `"log": false` in the policy to turn it off. Writing it is
 best effort: a log that cannot be written never turns a block into an allow. It
 rotates past 1 MiB, and `uninstall` leaves it in place with your policy.
 
+## Removing it
+
+`herkos uninstall` removes exactly what `init` added — the hook and its registration, the deny rules and sandbox entries, the Codex permission profile and execpolicy file — and leaves your policy and the blocked-call log in place. Each adapter also leaves the one pre-herkos backup it took before first editing a config file (`settings.json.herkos-bak`, `config.toml.herkos-bak`, `hooks.json.herkos-bak`): it is your copy of the file as it was before herkos touched it, never overwritten since, and removing it at uninstall would destroy the recovery path exactly when you might want it. Delete the backups yourself once you are satisfied.
+
 ## Proof against other spellings
 
 A PASS that only shows the script runs proves little. `herkos check` also runs a
@@ -147,7 +151,7 @@ downloading a script to a file and then running it, and piping a download to an
 interpreter.
 
 One class of refusal is **documented rather than fixed**: a shell command whose
-*text* names a credential path. `rg '.aws/credentials' .`, documentation that
+_text_ names a credential path. `rg '.aws/credentials' .`, documentation that
 mentions `~/.ssh/id_`, an echo of such a label — all refused, because the hook
 matches Bash command text against the never-list's path fragments (that is also
 how `cat ~/.ssh/id_rsa` is caught) and text cannot reveal intent: the same

@@ -185,7 +185,11 @@ describe("the .env templates are not refused (D-003: a false positive teaches us
   const scriptPath = writeHook(generateHook(compile(loadEffectivePolicy())));
 
   it("passes Read, Write and cat of every committed template spelling", () => {
-    for (const t of ["app/.env.example", "app/.env.sample", "docs/.env.template"]) {
+    for (const t of [
+      "app/.env.example",
+      "app/.env.sample",
+      "docs/.env.template",
+    ]) {
       expect(
         fireHook(
           scriptPath,
@@ -250,18 +254,23 @@ describe("notPaths exclusions", () => {
     const v = validatePolicy(ruleWith({ notPaths: ["foo("] }));
     expect(
       v.errors.some(
-        (e) => e.includes("test-rule") && e.includes("not a valid extended regex"),
+        (e) =>
+          e.includes("test-rule") && e.includes("not a valid extended regex"),
       ),
     ).toBe(true);
   });
 
   it("make the rule's own match examples honest — an excluded spelling is not matched", () => {
     const v = validatePolicy(
-      ruleWith({ paths: ["/.env"], notPaths: ["\\.env\\.example$"], match: ["app/.env.example"] }),
+      ruleWith({
+        paths: ["/.env"],
+        notPaths: ["\\.env\\.example$"],
+        match: ["app/.env.example"],
+      }),
     );
-    expect(
-      v.errors.some((e) => e.includes("is not matched by the rule")),
-    ).toBe(true);
+    expect(v.errors.some((e) => e.includes("is not matched by the rule"))).toBe(
+      true,
+    );
   });
 });
 
@@ -403,6 +412,102 @@ describe("codex adapter: default_permissions is a ROOT key", () => {
       if (prev.HERKOS_CONFIG === undefined) delete process.env.HERKOS_CONFIG;
       fs.rmSync(home, { recursive: true, force: true });
       fs.rmSync(cfgDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("codex adapter: unwire leaves no empty hooks skeleton", () => {
+  const setup = (): {
+    home: string;
+    cfgDir: string;
+    prev: Record<string, string | undefined>;
+  } => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "herkos-codex-un-"));
+    const cfgDir = fs.mkdtempSync(path.join(os.tmpdir(), "herkos-cfg-un-"));
+    const prev = {
+      CODEX_HOME: process.env.CODEX_HOME,
+      HERKOS_CONFIG: process.env.HERKOS_CONFIG,
+    };
+    process.env.CODEX_HOME = home;
+    process.env.HERKOS_CONFIG = cfgDir;
+    return { home, cfgDir, prev };
+  };
+  const teardown = (s: ReturnType<typeof setup>): void => {
+    process.env.CODEX_HOME = s.prev.CODEX_HOME;
+    process.env.HERKOS_CONFIG = s.prev.HERKOS_CONFIG;
+    if (s.prev.CODEX_HOME === undefined) delete process.env.CODEX_HOME;
+    if (s.prev.HERKOS_CONFIG === undefined) delete process.env.HERKOS_CONFIG;
+    fs.rmSync(s.home, { recursive: true, force: true });
+    fs.rmSync(s.cfgDir, { recursive: true, force: true });
+  };
+
+  it("keeps foreign hook events, drops the emptied key, and deletes an only-herkos hooks.json", async () => {
+    const { codexAdapter } = await import("../src/adapters/codex.js");
+    const { hookPath } = await import("../src/adapters/claude-code.js");
+    const s = setup();
+    try {
+      const hp = path.join(s.home, "hooks.json");
+      const ours = (extra = ""): unknown => ({
+        matcher: "^Bash$",
+        hooks: [
+          {
+            type: "command",
+            command: `sh "${hookPath()}" --harness codex${extra}`,
+          },
+        ],
+      });
+      const foreign = {
+        matcher: "^Bash$",
+        hooks: [{ type: "command", command: "sh /mine/keep.sh" }],
+      };
+      fs.writeFileSync(
+        hp,
+        JSON.stringify({
+          hooks: {
+            PreToolUse: [ours(), foreign],
+            SessionStart: [foreign],
+          },
+        }),
+      );
+      codexAdapter.unwire();
+      const after = JSON.parse(fs.readFileSync(hp, "utf8"));
+      // The emptied key is gone; the foreign event survives beside SessionStart.
+      expect(after.hooks["PreToolUse"]).toEqual([foreign]);
+      expect(after.hooks.SessionStart).toEqual([foreign]);
+
+      // Now an only-herkos file: unwire restores the pre-herkos state exactly.
+      fs.writeFileSync(hp, JSON.stringify({ hooks: { PreToolUse: [ours()] } }));
+      codexAdapter.unwire();
+      expect(fs.existsSync(hp)).toBe(false);
+    } finally {
+      teardown(s);
+    }
+  });
+
+  it("keeps the pre-herkos backups, like the Claude adapter", async () => {
+    const { codexAdapter } = await import("../src/adapters/codex.js");
+    const s = setup();
+    try {
+      fs.writeFileSync(path.join(s.home, "config.toml"), 'model = "x"\n');
+      fs.writeFileSync(
+        path.join(s.home, "hooks.json"),
+        JSON.stringify({ hooks: {} }),
+      );
+      codexAdapter.wire(compile(loadEffectivePolicy()));
+      codexAdapter.unwire();
+      // The one pre-herkos backup each adapter took stays for the user.
+      expect(fs.existsSync(path.join(s.home, "config.toml.herkos-bak"))).toBe(
+        true,
+      );
+      expect(fs.existsSync(path.join(s.home, "hooks.json.herkos-bak"))).toBe(
+        true,
+      );
+      // And the config carries no herkos residue.
+      const cfg = fs.readFileSync(path.join(s.home, "config.toml"), "utf8");
+      expect(cfg).toContain('model = "x"');
+      expect(cfg).not.toContain("herkos");
+    } finally {
+      teardown(s);
     }
   });
 });

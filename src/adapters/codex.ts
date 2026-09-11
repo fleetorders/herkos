@@ -438,17 +438,31 @@ export const codexAdapter: HarnessAdapter = {
     }
     const hp = hooksJsonPath();
     if (fs.existsSync(hp)) {
-      const doc = JSON.parse(fs.readFileSync(hp, "utf8")) as {
-        hooks?: Record<string, unknown[]>;
-      };
-      const pre = doc.hooks?.["PreToolUse"];
+      let doc: { hooks?: Record<string, unknown[]> } = {};
+      try {
+        doc = JSON.parse(fs.readFileSync(hp, "utf8")) as typeof doc;
+      } catch {
+        doc = {}; // unreadable: nothing of ours is provably in there; leave it
+      }
+      const hooks = doc.hooks ?? {};
+      const pre = hooks["PreToolUse"];
       if (Array.isArray(pre)) {
         const kept = pre.filter(
           (e) => !JSON.stringify(e ?? "").includes(hookPath()),
         );
         if (kept.length !== pre.length) {
-          doc.hooks!["PreToolUse"] = kept;
-          fs.writeFileSync(hp, JSON.stringify(doc, null, 2) + "\n");
+          // Leave no empty skeleton behind (the Claude adapter's rule): an
+          // emptied event key goes, an emptied hooks wrapper goes, and a file
+          // that held nothing but our registration — wire creates it when
+          // absent — is removed, restoring the pre-herkos state exactly.
+          if (kept.length === 0) delete hooks["PreToolUse"];
+          else hooks["PreToolUse"] = kept;
+          if (Object.keys(hooks).length === 0) delete doc.hooks;
+          if (Object.keys(doc).length === 0) {
+            fs.rmSync(hp);
+          } else {
+            fs.writeFileSync(hp, JSON.stringify(doc, null, 2) + "\n");
+          }
           changed.push(hp);
         }
       }
