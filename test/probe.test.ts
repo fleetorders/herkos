@@ -6,7 +6,8 @@ import { isolateConfig } from "./helpers.js";
 
 isolateConfig();
 
-const { judgeRun, runLiveProbe, PROBE_CASES } = await import("../src/probe.js");
+const { judgeRun, runLiveProbe, PROBE_CASES, parsePositiveNumber } =
+  await import("../src/probe.js");
 import type { ProbeRun, ProbeRunner } from "../src/probe.js";
 import type {
   HarnessAdapter,
@@ -21,6 +22,26 @@ const run = (over: Partial<ProbeRun>): ProbeRun => ({
   stderr: "",
   timedOut: false,
   ...over,
+});
+
+describe("parsing the probe's numeric ceilings", () => {
+  it("takes the fallback when the flag is absent", () => {
+    expect(parsePositiveNumber(undefined, "budget-usd", 0.5)).toBe(0.5);
+    expect(parsePositiveNumber(undefined, "timeout", 120)).toBe(120);
+  });
+
+  it("parses a real number", () => {
+    expect(parsePositiveNumber("0.25", "budget-usd", 0.5)).toBe(0.25);
+    expect(parsePositiveNumber("45", "timeout", 120)).toBe(45);
+  });
+
+  it("refuses anything that is not a positive finite number", () => {
+    for (const bad of ["abc", "", "0", "-1", "NaN", "1e999"]) {
+      expect(() => parsePositiveNumber(bad, "timeout", 120)).toThrow(
+        /--timeout: expected a positive number/,
+      );
+    }
+  });
 });
 
 describe("judging a probe run", () => {

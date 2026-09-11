@@ -166,6 +166,28 @@ export function judgeRun(
   };
 }
 
+/**
+ * Parse a numeric CLI option the probe's ceilings depend on, refusing a value
+ * that is not a positive finite number BEFORE anything runs. `Number("abc")`
+ * is NaN, and `Math.max(0.01, NaN)` stays NaN — which would print "$NaN" and
+ * pass a NaN timeout to the child, silently removing the ceiling the user
+ * thinks they set. `Number("")` is 0, so an empty flag value is refused too.
+ */
+export function parsePositiveNumber(
+  raw: string | undefined,
+  name: string,
+  fallback: number,
+): number {
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new Error(
+      `--${name}: expected a positive number, got ${JSON.stringify(raw)}`,
+    );
+  }
+  return n;
+}
+
 export interface ProbeOptions {
   /** Adapter ids to probe; default every installed one with a probe command. */
   harnesses?: string[];

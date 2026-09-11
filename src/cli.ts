@@ -16,7 +16,7 @@ import { readBlockLog, summariseBlocks } from "./blocklog.js";
 import { runBypassCorpus } from "./corpus.js";
 import type { CorpusResult, HarnessView } from "./corpus.js";
 import { discoverCommand } from "./discover.js";
-import { runLiveProbe } from "./probe.js";
+import { runLiveProbe, parsePositiveNumber } from "./probe.js";
 import type { ProbeVerdict } from "./probe.js";
 
 function printValidation(v: ValidationResult): void {
@@ -329,6 +329,22 @@ async function probeCmd(opts: {
   budgetUsd?: string;
   timeout?: string;
 }): Promise<void> {
+  // The ceilings are parsed and refused FIRST: a NaN budget or timeout must
+  // exit before any harness is even detected, let alone run.
+  let budgetUsd: number;
+  let timeoutS: number;
+  try {
+    budgetUsd = parsePositiveNumber(
+      opts.budgetUsd,
+      "budget-usd",
+      DEFAULT_BUDGET_USD,
+    );
+    timeoutS = parsePositiveNumber(opts.timeout, "timeout", DEFAULT_TIMEOUT_S);
+  } catch (e) {
+    process.stdout.write(pc.red(`herkos: ${(e as Error).message}\n`));
+    process.exit(1);
+  }
+  const timeoutMs = Math.max(10, timeoutS) * 1000;
   const installed = detectInstalled().filter((a) => a.liveProbeCommand);
   const chosen = opts.harness
     ? installed.filter((a) => a.id === opts.harness)
@@ -341,12 +357,6 @@ async function probeCmd(opts: {
     );
     process.exit(1);
   }
-  const budgetUsd = Math.max(
-    0.01,
-    Number(opts.budgetUsd ?? DEFAULT_BUDGET_USD),
-  );
-  const timeoutMs =
-    Math.max(10, Number(opts.timeout ?? DEFAULT_TIMEOUT_S)) * 1000;
   const names = chosen.map((a) => a.name).join(", ");
 
   process.stdout.write(
