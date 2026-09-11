@@ -1,15 +1,19 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { isolateConfig } from "./helpers.js";
 
 const cfg = isolateConfig();
 
 const { loadEffectivePolicy, loadValidatedPolicy, validatePolicy, compile } =
   await import("../src/policy.js");
-const { CANDIDATES, discoverCandidates, addCandidatesToUserPolicy } =
-  await import("../src/discover.js");
+const {
+  CANDIDATES,
+  discoverCandidates,
+  addCandidatesToUserPolicy,
+  discoverCommand,
+} = await import("../src/discover.js");
 
 const policyFile = path.join(cfg, "policy.json");
 
@@ -174,5 +178,47 @@ describe("adding discovered candidates to the user policy", () => {
       "pgpass",
     ]);
     expect(user.disable).toEqual(["docker-auth"]);
+  });
+});
+
+describe("the discover command's --list flag", () => {
+  let home = "";
+  let captured = "";
+  let restore: () => void;
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "herkos-home-"));
+    fs.writeFileSync(path.join(home, ".pgpass"), "pw");
+    captured = "";
+    const orig = process.stdout.write.bind(process.stdout);
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation(((
+      chunk: string | Uint8Array,
+    ) => {
+      captured += typeof chunk === "string" ? chunk : "";
+      return true;
+    }) as typeof process.stdout.write);
+    restore = () => spy.mockRestore();
+  });
+  afterEach(() => {
+    restore();
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(policyFile, { force: true });
+  });
+
+  it("names the candidates and the add command, and never enters the prompt", async () => {
+    await discoverCommand({ list: true }, home);
+    expect(captured).toContain("pgpass");
+    expect(captured).toContain("To add these, run:");
+    expect(captured).toContain("herkos discover --add pgpass");
+    // The per-candidate keypress prompt is never reached — not even printed.
+    expect(captured).not.toContain("[y/N/a/q]");
+    // Nothing was added: --list is read-only.
+    expect(fs.existsSync(policyFile)).toBe(false);
+  });
+
+  it("is distinct from the unattended branch it resembles", async () => {
+    // Without --list and off a terminal, the same hint carries the
+    // not-a-terminal lead; --list must not claim that about a terminal.
+    await discoverCommand({}, home);
+    expect(captured).toContain("Not a terminal — to add these, run:");
   });
 });

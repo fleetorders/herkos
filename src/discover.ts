@@ -18,8 +18,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import pc from "picocolors";
 import type { EffectivePolicy, Rule, UserPolicy } from "./policy.js";
-import { userPolicyPath } from "./policy.js";
+import { loadEffectivePolicy, userPolicyPath } from "./policy.js";
 
 /**
  * A credential-shaped location herkos knows by convention. `probe` is the path,
@@ -308,4 +309,109 @@ export function addCandidatesToUserPolicy(
     fs.writeFileSync(p, JSON.stringify(policy, null, 2) + "\n");
   }
   return { added, skipped, policyPath: p };
+}
+
+/**
+ * The `herkos discover` command body (the options are declared in cli.ts).
+ * Lives here, beside the candidates it names, so the flag handling is testable
+ * without the CLI's argv: `--add` adds named ids, `--list` names the candidates
+ * and stops, a terminal gets the one-keypress prompt, and any other unattended
+ * context is handed the exact command that adds them.
+ */
+export async function discoverCommand(
+  opts: {
+    add?: string;
+    list?: boolean;
+  },
+  home: string = os.homedir(),
+): Promise<void> {
+  const effective = loadEffectivePolicy();
+  const found = discoverCandidates(effective, home);
+
+  if (opts.add) {
+    const ids = opts.add
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const r = addCandidatesToUserPolicy(ids, effective, home);
+    if (r.added.length)
+      process.stdout.write(
+        pc.green(`added ${r.added.length} rule(s): ${r.added.join(", ")}\n`),
+      );
+    if (r.skipped.length)
+      process.stdout.write(
+        pc.yellow(
+          `skipped (already present, covered, or not found here): ${r.skipped.join(", ")}\n`,
+        ),
+      );
+    if (r.added.length)
+      process.stdout.write(
+        `Run ${pc.bold("herkos init")} to compile the new rule(s) into your harnesses.\n`,
+      );
+    return;
+  }
+
+  if (found.length === 0) {
+    process.stdout.write(
+      "herkos discover — no uncovered credential-shaped files found on this machine.\n",
+    );
+    return;
+  }
+
+  process.stdout.write(
+    `herkos discover — ${found.length} credential-shaped file(s) present here and NOT on your never-list.\nPaths only; herkos never reads their contents.\n\n`,
+  );
+  for (const d of found) {
+    process.stdout.write(
+      `  ${pc.bold(d.candidate.rule.id)} — ${d.candidate.what}\n    ${pc.dim(d.foundAt)}\n`,
+    );
+  }
+  process.stdout.write("\n");
+
+  // --list names them and stops; so does any context without a terminal (a
+  // script, CI, an agent). Neither may block on input — name the one command
+  // that adds them instead.
+  if (opts.list || !process.stdin.isTTY) {
+    const ids = found.map((d) => d.candidate.rule.id).join(",");
+    process.stdout.write(
+      `${opts.list ? "To add these, run:" : "Not a terminal — to add these, run:"}\n  ${pc.bold(`herkos discover --add ${ids}`)}\nor a comma-separated subset of those ids.\n`,
+    );
+    return;
+  }
+
+  const readline = await import("node:readline/promises");
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  const chosen: string[] = [];
+  try {
+    for (const d of found) {
+      const ans = (
+        await rl.question(`Add ${pc.bold(d.candidate.rule.id)}? [y/N/a/q] `)
+      )
+        .trim()
+        .toLowerCase();
+      if (ans === "q") break;
+      if (ans === "a") {
+        chosen.push(...found.map((x) => x.candidate.rule.id));
+        break;
+      }
+      if (ans === "y") chosen.push(d.candidate.rule.id);
+    }
+  } finally {
+    rl.close();
+  }
+  const unique = [...new Set(chosen)];
+  if (unique.length === 0) {
+    process.stdout.write("Nothing added.\n");
+    return;
+  }
+  const r = addCandidatesToUserPolicy(unique, effective, home);
+  process.stdout.write(
+    pc.green(`\nAdded ${r.added.length} rule(s): ${r.added.join(", ")}\n`),
+  );
+  process.stdout.write(
+    `Run ${pc.bold("herkos init")} to compile them into your harnesses.\n`,
+  );
 }
