@@ -39,6 +39,13 @@ export interface BypassCase {
   note: string;
   /** A legitimate call: refusing it is a false alarm, and a FAIL. */
   benign?: boolean;
+  /**
+   * A benign call the hook is DOCUMENTED to refuse — a known refusal the
+   * corpus pins rather than hides (a shell command whose text names a
+   * credential path; text cannot reveal intent). The run fails if the hook
+   * stops refusing it, because then the documentation is wrong.
+   */
+  knownRefusal?: boolean;
   payload: { tool_name: string; tool_input: Record<string, unknown> };
   /** The verdict the generated hook must return. */
   hook: "block" | "pass";
@@ -111,7 +118,11 @@ export function runBypassCorpus(
       const ok =
         gotHook !== "error" &&
         (c.benign
-          ? gotHook === "pass"
+          ? c.knownRefusal
+            ? // A documented known refusal must KEEP being refused, or the
+              // documentation (README, this case's note) is wrong.
+              gotHook === "block"
+            : gotHook === "pass"
           : c.hook === "block"
             ? gotHook === "block"
             : true);

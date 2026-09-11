@@ -159,6 +159,11 @@ function printCorpus(results: CorpusResult[]): void {
     }
     let hook: string;
     if (r.gotHook === "error") hook = "the hook errored";
+    else if (r.case.benign && r.case.knownRefusal)
+      hook =
+        r.gotHook === "block"
+          ? "refused — a documented known refusal"
+          : "allowed — the documented refusal no longer happens; update this case and the docs";
     else if (r.case.benign)
       hook =
         r.gotHook === "pass"

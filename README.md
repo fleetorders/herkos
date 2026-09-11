@@ -146,6 +146,17 @@ papered over, because one text pattern cannot tell them from everyday use:
 downloading a script to a file and then running it, and piping a download to an
 interpreter.
 
+One class of refusal is **documented rather than fixed**: a shell command whose
+*text* names a credential path. `rg '.aws/credentials' .`, documentation that
+mentions `~/.ssh/id_`, an echo of such a label — all refused, because the hook
+matches Bash command text against the never-list's path fragments (that is also
+how `cat ~/.ssh/id_rsa` is caught) and text cannot reveal intent: the same
+string is a search term in one command and a file read in the next. The file
+tools' search arguments are exempt by name — a `Grep` pattern is free text —
+but inside a shell there is no such signal, and refusing is the safe side. The
+corpus carries this as a known-refusal case, so the behavior stays pinned and
+named, never silent.
+
 Your own rules can carry examples, which `validate` runs with the hook's own
 evaluator before anything is wired:
 

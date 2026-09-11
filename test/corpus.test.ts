@@ -42,9 +42,20 @@ describe("the bypass corpus against the generated hook", () => {
 
   it("never credits a layer with holding a benign call", () => {
     for (const c of CORPUS.filter((x) => x.benign)) {
-      expect(c.hook).toBe("pass");
       expect(c.heldBy).toEqual([]);
+      // A benign case must demand a pass — unless it is a documented known
+      // refusal, which must demand exactly the refusal the docs describe.
+      expect(c.hook).toBe(c.knownRefusal ? "block" : "pass");
     }
+  });
+
+  it("pins the documented Bash-text refusal: a search naming a credential path IS refused", () => {
+    const c = CORPUS.find((x) => x.id === "benign-search-for-a-name-in-bash");
+    expect(c?.benign).toBe(true);
+    expect(c?.knownRefusal).toBe(true);
+    const r = results.find((x) => x.case.id === "benign-search-for-a-name-in-bash");
+    expect(r?.gotHook).toBe("block");
+    expect(r?.ok).toBe(true);
   });
 });
 
