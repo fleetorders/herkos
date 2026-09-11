@@ -48,7 +48,14 @@ enforce depends on what the harness exposes:
 
 - **Claude Code — full enforcement.** herkos installs a small, self-contained
   shell hook on `PreToolUse` that blocks both rule classes on every tool call, in
-  every mode (including headless / skip-permissions).
+  every mode (including headless / skip-permissions). The hook matches **every
+  tool**, including tool-server (MCP) tools you add later, and reads arguments by
+  name — `file_path`, `path`, `paths`, `notebook_path`, `command`, `args` and
+  their common spellings, at any depth. A tool it does not know whose arguments
+  carry none of those names is announced as `herkos UNCOVERED` for that call,
+  never assumed safe. Search patterns, URLs and free text (an edit's new
+  content, a prompt) are deliberately not read as paths: documentation that
+  names a credential file is not an attempt to read it.
 - **Codex CLI — credential reads OS-enforced; fetched-code via a hook you trust
   once.** herkos compiles the credential never-list into a Codex permission
   profile whose filesystem `deny` entries are enforced by the OS sandbox

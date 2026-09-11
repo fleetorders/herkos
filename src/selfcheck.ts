@@ -64,6 +64,15 @@ export const CASES: CheckCase[] = [
     }),
   },
   {
+    name: "blocks a tool-server tool reading an SSH key by path",
+    rule: "ssh-private-keys",
+    wantExit: 2,
+    payload: JSON.stringify({
+      tool_name: "mcp__filesystem__read_text_file",
+      tool_input: { path: "project/.ssh/id_ed25519" },
+    }),
+  },
+  {
     name: "passes plain git status",
     wantExit: 0,
     payload: JSON.stringify({
