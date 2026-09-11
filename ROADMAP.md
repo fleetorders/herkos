@@ -13,6 +13,8 @@ than left to rot. What exists today is described in the README, not here.
 - Credential reads in the harness's own deny layer — **done** for Claude Code
   permission deny rules, with exact ownership tracking so `uninstall` removes
   only what herkos added.
+- A record of what was refused — **done**: a blocked-call log without command
+  text, per-rule counts in `status`.
 - Adapters for more harnesses (the policy is harness-agnostic; each is a new
   adapter behind the shared interface).
 - A guided `herkos init` that reports, per harness, exactly what it can and

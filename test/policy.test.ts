@@ -238,6 +238,7 @@ describe("degradation on an invalid regex baked past validation", () => {
     hash: "testhash0000",
     version: "0.0.0-test",
     classes: ["fetched-exec"],
+    logFile: "",
   };
   const scriptPath = writeHook(generateHook(compiled));
 

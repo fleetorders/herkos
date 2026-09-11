@@ -100,6 +100,17 @@ hook from one enforcing an older policy, and report the difference instead of a
 bare "protected". The stamp is drift detection, not tamper resistance: anyone
 who can edit the hook can edit the stamp.
 
+## A record of what it refused
+
+Every block appends one line to `~/.config/herkos/blocked.log` — time, harness,
+tool, rule id and working directory, and **never the command text**, which can
+itself carry a secret. `herkos status` turns it into per-rule counts and the five
+most recent blocks, so you can see that the guard fires at all, and spot a rule
+firing on legitimate work before it trains you to switch the guard off. The log
+is on by default; set `"log": false` in the policy to turn it off. Writing it is
+best effort: a log that cannot be written never turns a block into an allow. It
+rotates past 1 MiB, and `uninstall` leaves it in place with your policy.
+
 ## What it is NOT
 
 - **Not a sandbox.** OS-level containment is the platforms' job and they do it

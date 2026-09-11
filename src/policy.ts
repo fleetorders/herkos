@@ -53,6 +53,8 @@ export interface UserPolicy {
   rules?: Rule[];
   /** Baseline rule ids to disable (per-rule, auditable). */
   disable?: string[];
+  /** The blocked-call log (see blocklog.ts). On unless set to false. */
+  log?: boolean;
 }
 
 export interface EffectivePolicy {
@@ -60,6 +62,10 @@ export interface EffectivePolicy {
   disabled: string[];
   userPolicyPath: string;
   userPolicyLoaded: boolean;
+  /** Is the blocked-call log on? Absent means on. */
+  log?: boolean;
+  /** The `log` value exactly as the user wrote it — validated, never trusted. */
+  rawLog?: unknown;
 }
 
 /**
@@ -159,10 +165,20 @@ export const BASELINE: Rule[] = [
   },
 ];
 
+/** The directory herkos owns: its policy, generated hooks and its log. */
+export function herkosConfigDir(): string {
+  return (
+    process.env.HERKOS_CONFIG ?? path.join(os.homedir(), ".config", "herkos")
+  );
+}
+
 export function userPolicyPath(): string {
-  const base =
-    process.env.HERKOS_CONFIG ?? path.join(os.homedir(), ".config", "herkos");
-  return path.join(base, "policy.json");
+  return path.join(herkosConfigDir(), "policy.json");
+}
+
+/** Beside the policy: the one file the hook writes during enforcement. */
+export function blockLogFile(): string {
+  return path.join(herkosConfigDir(), "blocked.log");
 }
 
 export function loadEffectivePolicy(): EffectivePolicy {
@@ -182,7 +198,14 @@ export function loadEffectivePolicy(): EffectivePolicy {
     ...BASELINE.filter((r) => !disabled.includes(r.id)),
     ...(user.rules ?? []),
   ];
-  return { rules, disabled, userPolicyPath: p, userPolicyLoaded: loaded };
+  return {
+    rules,
+    disabled,
+    userPolicyPath: p,
+    userPolicyLoaded: loaded,
+    log: user.log !== false,
+    rawLog: user.log,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -320,6 +343,11 @@ export function validatePolicy(policy: EffectivePolicy): ValidationResult {
       warnings.push(`disable: "${d}" is not a baseline rule id (no effect)`);
     }
   }
+  if (policy.rawLog !== undefined && typeof policy.rawLog !== "boolean") {
+    errors.push(
+      `log must be true or false (got ${JSON.stringify(policy.rawLog)}) — it switches the blocked-call log`,
+    );
+  }
   return { errors, warnings };
 }
 
@@ -368,6 +396,8 @@ export interface CompiledPolicy {
   version: string;
   /** The rule classes present, in first-seen order — named when nothing is wired. */
   classes: RuleClass[];
+  /** Where the hook appends one line per block; "" when the log is off. */
+  logFile: string;
 }
 
 /**
@@ -475,5 +505,6 @@ export function compile(policy: EffectivePolicy): CompiledPolicy {
     hash: policyFingerprint(rules),
     version: HERKOS_VERSION,
     classes,
+    logFile: policy.log === false ? "" : blockLogFile(),
   };
 }

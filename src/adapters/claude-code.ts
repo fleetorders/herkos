@@ -14,7 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { spawnSync } from "node:child_process";
-import { compile, loadEffectivePolicy } from "../policy.js";
+import { blockLogFile, compile, loadEffectivePolicy } from "../policy.js";
 import type { CompiledPolicy, CompiledRule } from "../policy.js";
 import { COMMAND_KEYS, KNOWN_TOOLS, PATH_KEYS } from "../matchers.js";
 import type {
@@ -36,6 +36,14 @@ export function herkosDir(): string {
 export function hookPath(): string {
   return path.join(herkosDir(), "hook-claude-code.sh");
 }
+
+/** The blocked-call log the hook appends to (see blocklog.ts). */
+export function blockLogPath(): string {
+  return blockLogFile();
+}
+
+/** Rotate the log past this size: one previous generation is kept. */
+const LOG_MAX_BYTES = 1_048_576;
 
 /**
  * The session-start hook: one line per session saying whether the never-list is
@@ -235,10 +243,44 @@ STAMP=${shQuote(stampOf(policy))}
 PATH_KEYS=${shList(PATH_KEYS)}
 COMMAND_KEYS=${shList(COMMAND_KEYS)}
 KNOWN_TOOLS=${shList(KNOWN_TOOLS)}
+LOG_FILE=${shQuote(policy.logFile)}
+LOG_MAX_BYTES=${LOG_MAX_BYTES}
+TOOL=""
+
+# The registered command names its harness, so a block is attributed to it.
+HARNESS=unknown
+if [ "\${1:-}" = "--harness" ]; then
+  if [ "$#" -ge 2 ]; then HARNESS=$2; shift 2; else shift; fi
+fi
 
 block() {
   printf '%s\\n' "$1" >&2
   exit 2
+}
+
+# json VALUE — escape for a JSON string: backslash, quote, control characters.
+json() {
+  printf '%s' "$1" | tr -d '\\000-\\037' | sed -e 's/\\\\/\\\\\\\\/g' -e 's/"/\\\\"/g'
+}
+
+# log_block RULE — one JSON line per refusal: time, harness, tool, rule, cwd.
+# NEVER the command text, which can itself carry a secret. Best effort at every
+# step and every failure swallowed: a log that cannot be written must never
+# turn a block into an allow, and enforcement never depends on these utilities.
+log_block() {
+  [ -n "$LOG_FILE" ] || return 0
+  {
+    log_dir=$(dirname "$LOG_FILE")
+    [ -d "$log_dir" ] || mkdir -p "$log_dir"
+    if [ -f "$LOG_FILE" ]; then
+      log_size=$(wc -c < "$LOG_FILE" | tr -d ' ')
+      if [ "\${log_size:-0}" -gt "$LOG_MAX_BYTES" ]; then
+        mv -f "$LOG_FILE" "$LOG_FILE.1"
+      fi
+    fi
+    printf '{"event":"block","time":"%s","harness":"%s","tool":"%s","rule":"%s","cwd":"%s"}\\n' \\
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(json "$HARNESS")" "$(json "$TOOL")" "$(json "$1")" "$(json "$(pwd)")" >> "$LOG_FILE"
+  } 2>/dev/null || true
 }
 
 # enforce ID DESCRIPTION KIND SUBJECT REGEX — grep the subject against one
@@ -251,6 +293,7 @@ enforce() {
   printf '%s' "$4" | grep -Eq -e "$5"
   rc=$?
   if [ "$rc" -eq 0 ]; then
+    log_block "$1"
     block "BLOCKED (herkos) rule $1 — $2. This $3 is on the never-list. To adjust: narrow the rule in $POLICY_FILE or disable it by id; 'herkos rules' lists the policy."
   fi
   if [ "$rc" -ge 2 ]; then
@@ -474,7 +517,7 @@ export const claudeCodeAdapter: HarnessAdapter = {
     const pre: SettingsHookEntry[] = (hooks["PreToolUse"] ?? []).filter(
       (e) => !isOurs(e),
     );
-    const cmd = `sh "${hookPath()}"`;
+    const cmd = `sh "${hookPath()}" --harness claude-code`;
     // Every tool, including tool-server tools: the hook decides what to read by
     // argument name, so a new tool is covered without a new matcher.
     pre.push({ matcher: "*", hooks: [{ type: "command", command: cmd }] });

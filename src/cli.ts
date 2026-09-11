@@ -11,6 +11,7 @@ import {
 import type { ValidationResult } from "./policy.js";
 import { ADAPTERS, detectInstalled } from "./adapters/index.js";
 import { runSelfCheck, jqAvailable } from "./selfcheck.js";
+import { readBlockLog, summariseBlocks } from "./blocklog.js";
 
 function printValidation(v: ValidationResult): void {
   for (const e of v.errors)
@@ -91,6 +92,26 @@ function statusCmd(): void {
           ? pc.green(a.name + ": protected")
           : pc.yellow(a.name + ": NOT wired");
     process.stdout.write(`  ${label} — ${v.detail}\n`);
+  }
+  // What the guard has actually refused, per rule — the evidence for keeping,
+  // narrowing or disabling a rule, and proof it ever fired at all.
+  process.stdout.write(
+    `blocked-call log: ${compiled.logFile ? `on, at ${compiled.logFile}` : `off ("log": false in the policy)`}\n`,
+  );
+  const blocks = summariseBlocks(readBlockLog());
+  if (blocks.total === 0) {
+    process.stdout.write(`  ${pc.dim("no blocks on record")}\n`);
+  } else {
+    const counts = Object.entries(blocks.perRule)
+      .sort((a, b) => b[1] - a[1])
+      .map(([rule, n]) => `${rule} ${n}`)
+      .join(", ");
+    process.stdout.write(`  ${blocks.total} block(s) on record — ${counts}\n`);
+    for (const e of blocks.recent) {
+      process.stdout.write(
+        `  ${pc.dim(e.time)} ${e.harness} ${e.tool} ${pc.bold(e.rule)} in ${e.cwd}\n`,
+      );
+    }
   }
 }
 

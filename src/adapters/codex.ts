@@ -149,7 +149,9 @@ function wireHook(): void {
     if (!fs.existsSync(bak)) fs.copyFileSync(p, bak);
   }
   const hooks = doc.hooks ?? {};
-  const cmd = `sh "${hookPath()}"`;
+  // The harness name reaches the blocked-call log; the hook path stays the
+  // ownership marker, so an entry written before the argument existed is still ours.
+  const cmd = `sh "${hookPath()}" --harness codex`;
   const isOurs = (e: unknown): boolean =>
     JSON.stringify(e ?? "").includes(hookPath());
   const pre = ((hooks["PreToolUse"] as unknown[]) ?? []).filter(
