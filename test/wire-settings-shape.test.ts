@@ -29,33 +29,29 @@ describe("wire() refuses wrong-shape harness settings cleanly", () => {
     process.env.HERKOS_CONFIG = cfg;
   });
   afterEach(() => {
-    if (prev.CLAUDE_CONFIG_DIR === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    if (prev.CLAUDE_CONFIG_DIR === undefined)
+      delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = prev.CLAUDE_CONFIG_DIR;
     if (prev.HERKOS_CONFIG === undefined) delete process.env.HERKOS_CONFIG;
     else process.env.HERKOS_CONFIG = prev.HERKOS_CONFIG;
     fs.rmSync(configDir, { recursive: true, force: true });
   });
 
-  const settingsFile = (): string =>
-    path.join(configDir, "settings.json");
+  const settingsFile = (): string => path.join(configDir, "settings.json");
 
   const cases: [name: string, contents: string, message: RegExp][] = [
     ["hooks is a boolean", '{"hooks": true}', /has 'hooks' as a boolean/],
-    ["permissions is a number", '{"permissions": 42}', /has 'permissions' as a number/],
+    [
+      "permissions is a number",
+      '{"permissions": 42}',
+      /has 'permissions' as a number/,
+    ],
     ["sandbox is a string", '{"sandbox": "x"}', /has 'sandbox' as a string/],
     ["hooks is an array", '{"hooks": []}', /has 'hooks' as an array/],
     ["hooks is null", '{"hooks": null}', /has 'hooks' as null/],
-    [
-      "the whole file is an array",
-      "[]",
-      /holds an array, not a JSON object/,
-    ],
+    ["the whole file is an array", "[]", /holds an array, not a JSON object/],
     ["the whole file is null", "null", /holds null, not a JSON object/],
-    [
-      "the file is not valid JSON",
-      "{oops",
-      /is not valid JSON/,
-    ],
+    ["the file is not valid JSON", "{oops", /is not valid JSON/],
   ];
 
   for (const [name, contents, message] of cases) {

@@ -53,7 +53,9 @@ describe("the bypass corpus against the generated hook", () => {
     const c = CORPUS.find((x) => x.id === "benign-search-for-a-name-in-bash");
     expect(c?.benign).toBe(true);
     expect(c?.knownRefusal).toBe(true);
-    const r = results.find((x) => x.case.id === "benign-search-for-a-name-in-bash");
+    const r = results.find(
+      (x) => x.case.id === "benign-search-for-a-name-in-bash",
+    );
     expect(r?.gotHook).toBe("block");
     expect(r?.ok).toBe(true);
   });

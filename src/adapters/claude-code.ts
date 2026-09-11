@@ -262,9 +262,10 @@ function describeValue(v: unknown): string {
  * it was registered — leaving a stack trace and a half-applied install; this
  * gate runs BEFORE anything is written, so a refused init writes nothing.
  */
-function readSettingsForWire(
-  sp: string,
-): { settings: Record<string, unknown>; existed: boolean } {
+function readSettingsForWire(sp: string): {
+  settings: Record<string, unknown>;
+  existed: boolean;
+} {
   if (!fs.existsSync(sp)) return { settings: {}, existed: false };
   let parsed: unknown;
   try {
