@@ -2,19 +2,45 @@ import { Command } from "commander";
 import pc from "picocolors";
 import {
   loadEffectivePolicy,
+  validatePolicy,
   compile,
   BASELINE,
   userPolicyPath,
 } from "./policy.js";
+import type { ValidationResult } from "./policy.js";
 import { ADAPTERS, detectInstalled } from "./adapters/index.js";
-import { runSelfCheck } from "./selfcheck.js";
+import { runSelfCheck, jqAvailable } from "./selfcheck.js";
+
+function printValidation(v: ValidationResult): void {
+  for (const e of v.errors)
+    process.stdout.write(`  ${pc.red("error:")} ${e}\n`);
+  for (const w of v.warnings)
+    process.stdout.write(`  ${pc.yellow("warning:")} ${w}\n`);
+}
 
 function initCmd(opts: { dryRun?: boolean }): void {
-  const policy = compile(loadEffectivePolicy());
+  const eff = loadEffectivePolicy();
+  const v = validatePolicy(eff);
+  if (v.errors.length) {
+    printValidation(v);
+    process.stdout.write(
+      pc.red(`policy has ${v.errors.length} error(s); nothing was written\n`),
+    );
+    process.exit(1);
+  }
+  const policy = compile(eff);
   const installed = detectInstalled();
   process.stdout.write(
     `herkos — compiling ${policy.ruleCount} rules into installed harnesses\n`,
   );
+  printValidation(v);
+  if (!jqAvailable()) {
+    process.stdout.write(
+      pc.yellow(
+        "jq not installed — the generated hook will announce enforcement OFF on every call until jq is installed\n",
+      ),
+    );
+  }
   if (installed.length === 0) {
     process.stdout.write("  no supported harness detected on this machine\n");
     process.exit(1);
@@ -38,9 +64,14 @@ function initCmd(opts: { dryRun?: boolean }): void {
 
 function statusCmd(): void {
   const eff = loadEffectivePolicy();
+  const compiled = compile(eff);
   process.stdout.write(
     `policy: ${eff.rules.length} rules (${eff.userPolicyLoaded ? "baseline + user" : "baseline only"}); user policy ${eff.userPolicyLoaded ? "at" : "would be at"} ${userPolicyPath()}\n`,
   );
+  process.stdout.write(
+    `  compiles to ${pc.bold(compiled.hash)} (herkos ${compiled.version}) — a wired hook reporting a different stamp is enforcing an older policy\n`,
+  );
+  printValidation(validatePolicy(eff));
   if (eff.disabled.length)
     process.stdout.write(
       `  disabled baseline rules: ${eff.disabled.join(", ")}\n`,
@@ -52,16 +83,28 @@ function statusCmd(): void {
       continue;
     }
     const v = a.verify();
-    process.stdout.write(
-      `  ${v.ok ? pc.green(a.name + ": protected") : pc.yellow(a.name + ": NOT wired")} — ${v.detail}\n`,
-    );
+    const label =
+      v.state === "stale"
+        ? pc.yellow(a.name + ": STALE")
+        : v.ok
+          ? pc.green(a.name + ": protected")
+          : pc.yellow(a.name + ": NOT wired");
+    process.stdout.write(`  ${label} — ${v.detail}\n`);
   }
 }
 
 function checkCmd(): void {
+  const v = validatePolicy(loadEffectivePolicy());
+  printValidation(v);
   const s = runSelfCheck();
+  // A policy that fails validation is not enforced as written: a rule grep
+  // rejects is off at run time. That is a FAIL, not a warning.
+  if (v.errors.length) s.ok = false;
   process.stdout.write(
     `herkos check — ${s.results.length} enforcement cases${s.jq ? "" : pc.yellow(" (warning: jq not installed — the live hook degrades to allow)")}\n`,
+  );
+  process.stdout.write(
+    `  ${v.errors.length ? pc.red("FAIL") : pc.green("ok  ")} policy validates${v.errors.length ? ` (${v.errors.length} error(s) — run 'herkos validate')` : ""}\n`,
   );
   for (const r of s.results) {
     process.stdout.write(
@@ -87,6 +130,7 @@ function checkCmd(): void {
 
 function rulesCmd(): void {
   const eff = loadEffectivePolicy();
+  printValidation(validatePolicy(eff));
   for (const r of eff.rules) {
     const src = BASELINE.some((b) => b.id === r.id)
       ? pc.dim("[baseline]")
@@ -99,6 +143,19 @@ function rulesCmd(): void {
     process.stdout.write(
       `  ${pc.yellow("disabled:")} ${eff.disabled.join(", ")}\n`,
     );
+}
+
+function validateCmd(): void {
+  const eff = loadEffectivePolicy();
+  const v = validatePolicy(eff);
+  printValidation(v);
+  if (v.errors.length) {
+    process.stdout.write(pc.red(`\npolicy has ${v.errors.length} error(s)\n`));
+    process.exit(1);
+  }
+  process.stdout.write(
+    pc.green(`OK — policy valid (${eff.rules.length} rules)\n`),
+  );
 }
 
 function uninstallCmd(): void {
@@ -133,6 +190,10 @@ program
   .command("rules")
   .description("list the effective rules (baseline + user)")
   .action(rulesCmd);
+program
+  .command("validate")
+  .description("check the policy file for errors before wiring")
+  .action(validateCmd);
 program
   .command("uninstall")
   .description("remove herkos wiring from installed harnesses")

@@ -1,15 +1,21 @@
 export {
   BASELINE,
   loadEffectivePolicy,
+  loadValidatedPolicy,
+  validatePolicy,
   compile,
+  policyFingerprint,
   userPolicyPath,
 } from "./policy.js";
+export { HERKOS_VERSION } from "./version.js";
 export type {
   Rule,
   RuleClass,
   UserPolicy,
   EffectivePolicy,
   CompiledPolicy,
+  CompiledRule,
+  ValidationResult,
 } from "./policy.js";
 export { ADAPTERS, detectInstalled } from "./adapters/index.js";
 export type {
@@ -18,6 +24,15 @@ export type {
   WireResult,
   VerifyResult,
 } from "./adapters/types.js";
-export { generateHook } from "./adapters/claude-code.js";
-export { runSelfCheck, CASES } from "./selfcheck.js";
+export {
+  generateHook,
+  generateSessionStartHook,
+  shQuote,
+  stampOf,
+  readInstalledStamp,
+  hookPath,
+  sessionStartHookPath,
+  policySnapshotPath,
+} from "./adapters/claude-code.js";
+export { runSelfCheck, syntaxCheck, jqAvailable, CASES } from "./selfcheck.js";
 export type { CheckResult, CheckCase } from "./selfcheck.js";

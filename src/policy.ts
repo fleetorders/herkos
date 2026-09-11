@@ -14,6 +14,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import crypto from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { HERKOS_VERSION } from "./version.js";
 
 export type RuleClass = "credential-read" | "fetched-exec";
 
@@ -156,6 +159,154 @@ export function loadEffectivePolicy(): EffectivePolicy {
   return { rules, disabled, userPolicyPath: p, userPolicyLoaded: loaded };
 }
 
+// ---------------------------------------------------------------------------
+// Validation — catches policy mistakes BEFORE they are compiled into a hook.
+// The hook bakes patterns into a shell script and evaluates them with
+// `grep -E`; a pattern that grep rejects would make that rule fail open in
+// silence at run time (D-004: degrade loudly, never silently allow). So the
+// validator asks grep itself, the same evaluator, while wiring is still
+// refusable.
+// ---------------------------------------------------------------------------
+
+export interface ValidationResult {
+  errors: string[];
+  warnings: string[];
+}
+
+const RULE_CLASSES: readonly string[] = ["credential-read", "fetched-exec"];
+const KNOWN_RULE_KEYS: readonly string[] = [
+  "id",
+  "class",
+  "description",
+  "paths",
+  "commandPatterns",
+  "codexDeny",
+];
+
+/**
+ * Test one extended regex the way the hook will evaluate it: `grep -E` with
+ * the pattern as an argv element (never through a shell string). Exit 0 or 1
+ * means the pattern compiled; exit 2 or a spawn error means it did not.
+ */
+function grepAccepts(pattern: string): { ok: boolean; detail: string } {
+  const r = spawnSync("grep", ["-E", "-q", "-e", pattern], {
+    input: "",
+    encoding: "utf8",
+    timeout: 5_000,
+  });
+  if (r.error) return { ok: false, detail: String(r.error) };
+  if (r.status === 0 || r.status === 1) return { ok: true, detail: "" };
+  return {
+    ok: false,
+    detail: (r.stderr ?? "").trim() || `grep exited ${r.status}`,
+  };
+}
+
+function checkEntries(
+  rid: string,
+  key: "paths" | "commandPatterns",
+  entries: unknown[],
+  errors: string[],
+): void {
+  entries.forEach((entry, i) => {
+    const n = i + 1;
+    if (typeof entry !== "string" || entry.length === 0) {
+      errors.push(
+        `rule ${rid}: ${key} entry ${n} is not a non-empty string (skipped)`,
+      );
+      return;
+    }
+    if (/[\r\n]/.test(entry)) {
+      errors.push(`rule ${rid}: ${key} entry ${n} contains a newline`);
+      return;
+    }
+    // Path fragments are regex-escaped before they reach grep, so only raw
+    // command patterns need the evaluator's own verdict.
+    if (key === "commandPatterns") {
+      const g = grepAccepts(entry);
+      if (!g.ok) {
+        errors.push(
+          `rule ${rid}: pattern ${n} is not a valid extended regex: ${g.detail}`,
+        );
+      }
+    }
+  });
+}
+
+/** Validate an effective policy: errors block wiring; warnings just inform. */
+export function validatePolicy(policy: EffectivePolicy): ValidationResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const seen = new Set<string>();
+  policy.rules.forEach((raw, idx) => {
+    if (typeof raw !== "object" || raw === null) {
+      errors.push(`rule ${idx + 1}: not an object`);
+      return;
+    }
+    const rule = raw as Rule;
+    const rid =
+      typeof rule.id === "string" && rule.id.length > 0
+        ? rule.id
+        : `#${idx + 1}`;
+    if (rid.startsWith("#")) {
+      errors.push(`rule ${rid}: missing or empty id`);
+    } else {
+      if (seen.has(rid)) errors.push(`rule ${rid}: duplicate id`);
+      seen.add(rid);
+    }
+    if (!RULE_CLASSES.includes(rule.class)) {
+      errors.push(`rule ${rid}: unknown class "${String(rule.class)}"`);
+    }
+    const hasPaths = (rule.paths ?? []).length > 0;
+    const hasCmds = (rule.commandPatterns ?? []).length > 0;
+    if (!hasPaths && !hasCmds) {
+      errors.push(`rule ${rid}: has neither paths nor commandPatterns`);
+    }
+    checkEntries(rid, "paths", rule.paths ?? [], errors);
+    checkEntries(rid, "commandPatterns", rule.commandPatterns ?? [], errors);
+    // Unknown keys only matter for user rules — the baseline is ours.
+    if (!BASELINE.some((b) => b === raw)) {
+      for (const k of Object.keys(raw)) {
+        if (!KNOWN_RULE_KEYS.includes(k)) {
+          warnings.push(`rule ${rid}: unknown key "${k}" is ignored`);
+        }
+      }
+    }
+  });
+  for (const d of policy.disabled) {
+    if (!BASELINE.some((b) => b.id === d)) {
+      warnings.push(`disable: "${d}" is not a baseline rule id (no effect)`);
+    }
+  }
+  return { errors, warnings };
+}
+
+/**
+ * Load and validate in one step: throws (message lists every error, one per
+ * line) when the policy must not be compiled into a hook.
+ */
+export function loadValidatedPolicy(): EffectivePolicy {
+  const policy = loadEffectivePolicy();
+  const { errors } = validatePolicy(policy);
+  if (errors.length > 0) {
+    throw new Error(
+      [`policy has ${errors.length} error(s):`, ...errors].join("\n"),
+    );
+  }
+  return policy;
+}
+
+/** One rule's compiled matchers — the hook names the rule that fired. */
+export interface CompiledRule {
+  id: string;
+  class: RuleClass;
+  description: string;
+  /** POSIX extended regex alternation of this rule's escaped path fragments ("" if none). */
+  pathRegex: string;
+  /** This rule's extended regexes for command text. */
+  commandRegexes: string[];
+}
+
 /** The compiled matchers a hook needs: one path-fragment regex + command regexes. */
 export interface CompiledPolicy {
   /** POSIX extended regex alternation of escaped path fragments ("" if none). */
@@ -163,6 +314,46 @@ export interface CompiledPolicy {
   /** POSIX extended regexes for command-shaped rules. */
   commandRegexes: string[];
   ruleCount: number;
+  /** Per-rule matchers — refusals name the rule; the hook is generated from these. */
+  rules: CompiledRule[];
+  /** Where the user's policy lives — baked into refusal messages. */
+  userPolicyPath: string;
+  /** Fingerprint of the compiled rules — drift detection, see policyFingerprint. */
+  hash: string;
+  /** The herkos version that compiled this policy. */
+  version: string;
+  /** The rule classes present, in first-seen order — named when nothing is wired. */
+  classes: RuleClass[];
+}
+
+/**
+ * A short, stable fingerprint of the compiled never-list, baked into every
+ * generated hook. It lets `status` and the session-start line separate "the
+ * hook is current" from "the policy changed since this hook was installed" —
+ * the silent-drift failure that costs everything (a harness upgrade, a hand
+ * edit, a policy edited without re-running `init`).
+ *
+ * It covers exactly what the hook enforces — rule id, class, description and
+ * matchers — so reformatting the policy FILE without changing a rule correctly
+ * reports no drift, and a changed matcher always does. Not a tamper defence:
+ * a same-user hash has no trust anchor, and anyone who can edit the hook can
+ * edit the stamp.
+ */
+export function policyFingerprint(rules: CompiledRule[]): string {
+  const canonical = JSON.stringify(
+    rules.map((r) => [
+      r.id,
+      r.class,
+      r.description,
+      r.pathRegex,
+      r.commandRegexes,
+    ]),
+  );
+  return crypto
+    .createHash("sha256")
+    .update(canonical)
+    .digest("hex")
+    .slice(0, 12);
 }
 
 // Escape a literal path fragment for use inside a POSIX extended regex.
@@ -195,15 +386,26 @@ export function collectCodexDeny(policy: EffectivePolicy): CodexDeny {
 }
 
 export function compile(policy: EffectivePolicy): CompiledPolicy {
-  const fragments: string[] = [];
-  const commandRegexes: string[] = [];
-  for (const r of policy.rules) {
-    for (const p of r.paths ?? []) fragments.push(escapeERE(p));
-    for (const c of r.commandPatterns ?? []) commandRegexes.push(c);
-  }
+  const rules: CompiledRule[] = policy.rules.map((r) => ({
+    id: r.id,
+    class: r.class,
+    description: r.description,
+    pathRegex: (r.paths ?? []).map(escapeERE).join("|"),
+    commandRegexes: [...(r.commandPatterns ?? [])],
+  }));
+  const classes: RuleClass[] = [];
+  for (const r of rules) if (!classes.includes(r.class)) classes.push(r.class);
   return {
-    pathRegex: fragments.join("|"),
-    commandRegexes,
+    pathRegex: rules
+      .map((r) => r.pathRegex)
+      .filter((re) => re !== "")
+      .join("|"),
+    commandRegexes: rules.flatMap((r) => r.commandRegexes),
     ruleCount: policy.rules.length,
+    rules,
+    userPolicyPath: policy.userPolicyPath,
+    hash: policyFingerprint(rules),
+    version: HERKOS_VERSION,
+    classes,
   };
 }

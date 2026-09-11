@@ -20,6 +20,7 @@ bypass/skip-permissions runs.
 ```sh
 npx herkos init      # detect installed harnesses, wire the policy into each
 npx herkos check     # prove the never-list is enforced
+npx herkos validate  # check the policy file for errors before wiring
 npx herkos status    # what's protected, and with which rules
 ```
 
@@ -60,6 +61,26 @@ permitted`. This half is seamless and arguably stronger than a hook. For
 
 Adding a harness is adding an adapter, not redesigning — the policy never changes.
 
+## It tells you every session whether it is actually on
+
+The failure that costs everything is silent absence: a harness upgrade, a
+hand-edited settings file or a policy you edited and never recompiled leaves you
+believing you are guarded while nothing is. So herkos does not wait to be asked.
+It registers a second, tiny hook on session start that prints one line before
+the first tool call:
+
+```
+herkos: enforced on Claude Code — 9 rule(s) (credential-read, fetched-exec) checked on every tool call, in every mode.
+herkos: NOT wired on Claude Code — the enforcement hook is missing at …; nothing on the never-list is blocked (credential-read, fetched-exec). Run 'herkos init'.
+herkos: enforced on Claude Code with 9 rule(s), BUT …/policy.json changed since 'herkos init' — the hook still carries the old rules. Run 'herkos init' to recompile.
+```
+
+Every generated hook carries a **stamp** — the herkos version, a fingerprint of
+the compiled rules, and the rule count — so `herkos status` can tell a current
+hook from one enforcing an older policy, and report the difference instead of a
+bare "protected". The stamp is drift detection, not tamper resistance: anyone
+who can edit the hook can edit the stamp.
+
 ## What it is NOT
 
 - **Not a sandbox.** OS-level containment is the platforms' job and they do it
@@ -67,8 +88,9 @@ Adding a harness is adding an adapter, not redesigning — the policy never chan
   shipping your secrets), it does not jail the process.
 - **Not protection against everything.** It enforces a declared never-list. A
   risk you don't put on the list is one it won't stop.
-- **Not a set-and-forget-and-never-check tool.** Harnesses change; run
-  `herkos check` after upgrades, or on a schedule.
+- **Not a set-and-forget-and-never-check tool.** Harnesses change. herkos says
+  so itself at the start of every session (see above); `herkos check` proves it
+  on demand.
 
 ## Policy file
 
