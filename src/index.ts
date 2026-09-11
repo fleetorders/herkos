@@ -4,6 +4,7 @@ export {
   loadValidatedPolicy,
   validatePolicy,
   compile,
+  denyReadTargets,
   policyFingerprint,
   userPolicyPath,
 } from "./policy.js";
@@ -33,6 +34,8 @@ export {
   hookPath,
   sessionStartHookPath,
   policySnapshotPath,
+  claudeDenyRules,
+  ownedSettingsPath,
 } from "./adapters/claude-code.js";
 export { runSelfCheck, syntaxCheck, jqAvailable, CASES } from "./selfcheck.js";
 export type { CheckResult, CheckCase } from "./selfcheck.js";

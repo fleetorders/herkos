@@ -36,6 +36,16 @@ export interface Rule {
    * (e.g. fetched-exec rules), and that adapter falls back to its hook.
    */
   codexDeny?: string[];
+  /**
+   * Concrete read-deny targets for harness-native filesystem layers that take
+   * gitignore-style globs (Claude Code's permission deny rules and its OS
+   * sandbox): home-anchored (`~/…/id_*`), absolute (`/etc/…`), or relative to
+   * the session's working directory (`**\/.env`). Precise where precision is
+   * cheap — a key-file glob rather than the whole directory — because a native
+   * deny cannot be narrowed per call the way a user can narrow a hook rule.
+   * Absent → derived from `codexDeny` (a directory target becomes `dir/**`).
+   */
+  denyRead?: string[];
 }
 
 export interface UserPolicy {
@@ -64,6 +74,9 @@ export const BASELINE: Rule[] = [
     description: "SSH private keys",
     paths: [".ssh/id_"],
     codexDeny: ["~/.ssh"],
+    // Key files only: known_hosts and the client config stay readable, which a
+    // session debugging a git remote legitimately needs.
+    denyRead: ["~/.ssh/id_*"],
   },
   {
     id: "cloud-credentials",
@@ -76,6 +89,12 @@ export const BASELINE: Rule[] = [
       ".azure/msal_token_cache",
     ],
     codexDeny: ["~/.aws/credentials", "~/.config/gcloud", "~/.azure"],
+    denyRead: [
+      "~/.aws/credentials",
+      "~/.config/gcloud/**",
+      "~/.azure/accessTokens*",
+      "~/.azure/msal_token_cache*",
+    ],
   },
   {
     id: "kube-config",
@@ -83,6 +102,7 @@ export const BASELINE: Rule[] = [
     description: "Kubernetes cluster credentials",
     paths: [".kube/config"],
     codexDeny: ["~/.kube/config"],
+    denyRead: ["~/.kube/config"],
   },
   {
     id: "dotenv-files",
@@ -92,6 +112,7 @@ export const BASELINE: Rule[] = [
     // Matched as path fragments: covers .env, .env.local, .env.production, etc.
     paths: ["/.env"],
     codexDeny: ["**/.env", "**/.env.*"],
+    denyRead: ["**/.env", "**/.env.*"],
   },
   {
     id: "token-rc-files",
@@ -99,6 +120,7 @@ export const BASELINE: Rule[] = [
     description: "Per-user token files (.netrc, .npmrc, .pypirc)",
     paths: [".netrc", ".npmrc", ".pypirc"],
     codexDeny: ["~/.netrc", "~/.npmrc", "~/.pypirc"],
+    denyRead: ["~/.netrc", "~/.npmrc", "~/.pypirc"],
   },
   {
     id: "gnupg-private",
@@ -106,6 +128,9 @@ export const BASELINE: Rule[] = [
     description: "GnuPG private keyring",
     paths: [".gnupg/private-keys"],
     codexDeny: ["~/.gnupg"],
+    // The modern private-key directory and the legacy secret keyring; public
+    // keyrings stay readable so signature verification keeps working.
+    denyRead: ["~/.gnupg/private-keys-v1.d/**", "~/.gnupg/secring.gpg"],
   },
   {
     id: "docker-auth",
@@ -113,6 +138,7 @@ export const BASELINE: Rule[] = [
     description: "Docker registry auth file",
     paths: [".docker/config.json"],
     codexDeny: ["~/.docker/config.json"],
+    denyRead: ["~/.docker/config.json"],
   },
   {
     id: "macos-keychain",
@@ -181,6 +207,7 @@ const KNOWN_RULE_KEYS: readonly string[] = [
   "paths",
   "commandPatterns",
   "codexDeny",
+  "denyRead",
 ];
 
 /**
@@ -204,10 +231,15 @@ function grepAccepts(pattern: string): { ok: boolean; detail: string } {
 
 function checkEntries(
   rid: string,
-  key: "paths" | "commandPatterns",
-  entries: unknown[],
+  key: "paths" | "commandPatterns" | "codexDeny" | "denyRead",
+  entries: unknown,
   errors: string[],
 ): void {
+  if (entries === undefined) return;
+  if (!Array.isArray(entries)) {
+    errors.push(`rule ${rid}: ${key} must be a list of strings`);
+    return;
+  }
   entries.forEach((entry, i) => {
     const n = i + 1;
     if (typeof entry !== "string" || entry.length === 0) {
@@ -218,6 +250,14 @@ function checkEntries(
     }
     if (/[\r\n]/.test(entry)) {
       errors.push(`rule ${rid}: ${key} entry ${n} contains a newline`);
+      return;
+    }
+    // A native deny target is written inside the harness's own rule syntax,
+    // `Read(<target>)`; a parenthesis would end or corrupt that rule.
+    if ((key === "denyRead" || key === "codexDeny") && /[()]/.test(entry)) {
+      errors.push(
+        `rule ${rid}: ${key} entry ${n} contains "(" or ")" — it would break the harness's deny rule syntax`,
+      );
       return;
     }
     // Path fragments are regex-escaped before they reach grep, so only raw
@@ -262,8 +302,10 @@ export function validatePolicy(policy: EffectivePolicy): ValidationResult {
     if (!hasPaths && !hasCmds) {
       errors.push(`rule ${rid}: has neither paths nor commandPatterns`);
     }
-    checkEntries(rid, "paths", rule.paths ?? [], errors);
-    checkEntries(rid, "commandPatterns", rule.commandPatterns ?? [], errors);
+    checkEntries(rid, "paths", rule.paths, errors);
+    checkEntries(rid, "commandPatterns", rule.commandPatterns, errors);
+    checkEntries(rid, "codexDeny", rule.codexDeny, errors);
+    checkEntries(rid, "denyRead", rule.denyRead, errors);
     // Unknown keys only matter for user rules — the baseline is ours.
     if (!BASELINE.some((b) => b === raw)) {
       for (const k of Object.keys(raw)) {
@@ -305,6 +347,8 @@ export interface CompiledRule {
   pathRegex: string;
   /** This rule's extended regexes for command text. */
   commandRegexes: string[];
+  /** Gitignore-style read-deny targets for harness-native layers (see denyReadTargets). */
+  denyRead: string[];
 }
 
 /** The compiled matchers a hook needs: one path-fragment regex + command regexes. */
@@ -347,6 +391,7 @@ export function policyFingerprint(rules: CompiledRule[]): string {
       r.description,
       r.pathRegex,
       r.commandRegexes,
+      r.denyRead,
     ]),
   );
   return crypto
@@ -385,6 +430,28 @@ export function collectCodexDeny(policy: EffectivePolicy): CodexDeny {
   return { paths, globs, fetchedExecRules };
 }
 
+/**
+ * The read-deny targets one rule contributes to a harness's native filesystem
+ * layers. An explicit `denyRead` wins. Otherwise the rule's `codexDeny` targets
+ * are reused: a glob stays as written, and a home or absolute target — which may
+ * name a file or a directory, and cannot be told apart without touching the
+ * disk — contributes both itself and everything beneath it.
+ */
+export function denyReadTargets(rule: Rule): string[] {
+  const strings = (xs: unknown): string[] =>
+    Array.isArray(xs)
+      ? xs.filter((x): x is string => typeof x === "string" && x.length > 0)
+      : [];
+  const explicit = strings(rule.denyRead);
+  if (explicit.length > 0) return explicit;
+  const out: string[] = [];
+  for (const d of strings(rule.codexDeny)) {
+    if (d.includes("*")) out.push(d);
+    else out.push(d, `${d.replace(/\/+$/, "")}/**`);
+  }
+  return out;
+}
+
 export function compile(policy: EffectivePolicy): CompiledPolicy {
   const rules: CompiledRule[] = policy.rules.map((r) => ({
     id: r.id,
@@ -392,6 +459,7 @@ export function compile(policy: EffectivePolicy): CompiledPolicy {
     description: r.description,
     pathRegex: (r.paths ?? []).map(escapeERE).join("|"),
     commandRegexes: [...(r.commandPatterns ?? [])],
+    denyRead: denyReadTargets(r),
   }));
   const classes: RuleClass[] = [];
   for (const r of rules) if (!classes.includes(r.class)) classes.push(r.class);

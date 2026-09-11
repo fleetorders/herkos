@@ -58,6 +58,86 @@ export function policySnapshotPath(): string {
   return path.join(herkosDir(), "policy.snapshot");
 }
 
+/**
+ * Which entries of the harness's own settings herkos added. Permission rules are
+ * bare strings with no room for a marker, so ownership is recorded beside the
+ * hook: `unwire` removes exactly these, and an identical entry the user wrote
+ * before herkos is never recorded — so it is never removed.
+ */
+export function ownedSettingsPath(): string {
+  return path.join(herkosDir(), "claude-code-owned.json");
+}
+
+interface OwnedSettings {
+  /** permissions.deny entries herkos added. */
+  deny: string[];
+  /** herkos created the permissions object — drop it once it is empty. */
+  createdPermissions: boolean;
+  /** herkos created permissions.deny — drop it once it is empty. */
+  createdDeny: boolean;
+}
+
+function readOwned(): OwnedSettings {
+  try {
+    const o = JSON.parse(
+      fs.readFileSync(ownedSettingsPath(), "utf8"),
+    ) as Partial<OwnedSettings>;
+    return {
+      deny: Array.isArray(o.deny)
+        ? o.deny.filter((d): d is string => typeof d === "string")
+        : [],
+      createdPermissions: o.createdPermissions === true,
+      createdDeny: o.createdDeny === true,
+    };
+  } catch {
+    return { deny: [], createdPermissions: false, createdDeny: false };
+  }
+}
+
+/**
+ * The permission deny rules a policy compiles to: one `Read(…)` per read-deny
+ * target. These are the strongest layer Claude Code has — they hold in every
+ * permission mode, block through a symlink as well as its target, cover the
+ * file commands the harness recognises inside Bash, and no hook or setting can
+ * override them. Command-shaped rules never become deny rules: denying a
+ * command prefix would refuse every legitimate use of that program.
+ *
+ * Claude Code resolves a single leading slash relative to the settings file,
+ * so an absolute target is written with two.
+ */
+export function claudeDenyRules(policy: CompiledPolicy): string[] {
+  const out: string[] = [];
+  for (const r of policy.rules) {
+    for (const t of r.denyRead) {
+      const target = t.startsWith("/") && !t.startsWith("//") ? `/${t}` : t;
+      const rule = `Read(${target})`;
+      if (!out.includes(rule)) out.push(rule);
+    }
+  }
+  return out;
+}
+
+/** Drop permission containers herkos created once they hold nothing. */
+function tidyPermissions(
+  settings: Record<string, unknown>,
+  owned: OwnedSettings,
+): boolean {
+  const perms = settings["permissions"];
+  if (typeof perms !== "object" || perms === null) return false;
+  const p = perms as Record<string, unknown>;
+  let changed = false;
+  const deny = p["deny"];
+  if (owned.createdDeny && Array.isArray(deny) && deny.length === 0) {
+    delete p["deny"];
+    changed = true;
+  }
+  if (owned.createdPermissions && Object.keys(p).length === 0) {
+    delete settings["permissions"];
+    changed = true;
+  }
+  return changed;
+}
+
 function settingsPath(configDir: string): string {
   return path.join(configDir, "settings.json");
 }
@@ -422,6 +502,38 @@ export const claudeCodeAdapter: HarnessAdapter = {
     });
     hooks["SessionStart"] = start;
 
+    // 4. Credential reads as the harness's own permission deny rules.
+    const owned = readOwned();
+    const rawPerms = settings["permissions"];
+    const hadPerms = typeof rawPerms === "object" && rawPerms !== null;
+    const permissions = (hadPerms ? rawPerms : {}) as Record<string, unknown>;
+    const hadDeny = Array.isArray(permissions["deny"]);
+    // Withdraw what herkos added last time first, so a narrowed policy leaves no
+    // stale entry behind; entries the user wrote are carried over untouched.
+    const deny = (hadDeny ? (permissions["deny"] as unknown[]) : []).filter(
+      (d) => !(typeof d === "string" && owned.deny.includes(d)),
+    );
+    const added: string[] = [];
+    for (const rule of claudeDenyRules(policy)) {
+      if (!deny.includes(rule)) {
+        deny.push(rule);
+        added.push(rule);
+      }
+    }
+    const nowOwned: OwnedSettings = {
+      deny: added,
+      createdPermissions: owned.createdPermissions || !hadPerms,
+      createdDeny: owned.createdDeny || !hadDeny,
+    };
+    permissions["deny"] = deny;
+    settings["permissions"] = permissions;
+    tidyPermissions(settings, nowOwned);
+    fs.writeFileSync(
+      ownedSettingsPath(),
+      JSON.stringify(nowOwned, null, 2) + "\n",
+    );
+    changed.push(ownedSettingsPath());
+
     settings["hooks"] = hooks;
     fs.mkdirSync(configDir, { recursive: true });
     fs.writeFileSync(sp, JSON.stringify(settings, null, 2) + "\n");
@@ -429,7 +541,7 @@ export const claudeCodeAdapter: HarnessAdapter = {
 
     return {
       changed,
-      detail: `hook generated (${policy.ruleCount} rules, stamp ${stampOf(policy)}) and registered on PreToolUse for every tool; a session-start line reports enforcement each session. Takes effect for sessions started from now on.`,
+      detail: `hook generated (${policy.ruleCount} rules, stamp ${stampOf(policy)}) and registered on PreToolUse for every tool; ${claudeDenyRules(policy).length} credential read(s) added to permissions.deny; a session-start line reports enforcement each session. Takes effect for sessions started from now on.`,
     };
   },
 
@@ -456,6 +568,21 @@ export const claudeCodeAdapter: HarnessAdapter = {
         else hooks[event] = kept;
         touched = true;
       }
+      const owned = readOwned();
+      const perms = settings["permissions"] as
+        | Record<string, unknown>
+        | undefined;
+      if (perms && Array.isArray(perms["deny"]) && owned.deny.length > 0) {
+        const denyList = perms["deny"] as unknown[];
+        const kept = denyList.filter(
+          (d) => !(typeof d === "string" && owned.deny.includes(d)),
+        );
+        if (kept.length !== denyList.length) {
+          perms["deny"] = kept;
+          touched = true;
+        }
+      }
+      if (tidyPermissions(settings, owned)) touched = true;
       if (touched) {
         if (Object.keys(hooks).length === 0) delete settings["hooks"];
         else settings["hooks"] = hooks;
@@ -467,6 +594,7 @@ export const claudeCodeAdapter: HarnessAdapter = {
       hookPath(),
       sessionStartHookPath(),
       policySnapshotPath(),
+      ownedSettingsPath(),
     ]) {
       if (fs.existsSync(f)) {
         fs.rmSync(f);
@@ -519,7 +647,8 @@ export const claudeCodeAdapter: HarnessAdapter = {
     // Present is not current: a policy edited without re-running `init` leaves a
     // hook that enforces the OLD never-list, which is the honest thing to say.
     const installed = readInstalledStamp();
-    const want = stampOf(compile(loadEffectivePolicy()));
+    const current = compile(loadEffectivePolicy());
+    const want = stampOf(current);
     const notes: string[] = [
       "hook present and registered on PreToolUse for every tool",
     ];
@@ -533,6 +662,25 @@ export const claudeCodeAdapter: HarnessAdapter = {
         state: "stale",
         detail: `enforcing an OLDER policy — the hook carries '${installed}' but the current policy compiles to '${want}'; run 'herkos init' to recompile`,
       };
+    }
+    // The deny rules are a second copy of the credential never-list in a file
+    // the user also edits by hand; one deleted there is a hole the hook's stamp
+    // cannot see.
+    const perms = settings["permissions"] as { deny?: unknown } | undefined;
+    const present = Array.isArray(perms?.deny) ? (perms.deny as unknown[]) : [];
+    const expected = claudeDenyRules(current);
+    const missing = expected.filter((r) => !present.includes(r));
+    if (missing.length > 0) {
+      return {
+        ok: false,
+        state: "stale",
+        detail: `${missing.length} of ${expected.length} credential deny rule(s) missing from permissions.deny in ${sp}: ${missing.join(", ")} — run 'herkos init'`,
+      };
+    }
+    if (expected.length > 0) {
+      notes.push(
+        `${expected.length} credential deny rule(s) present in permissions.deny`,
+      );
     }
     notes.push(
       (hooks["SessionStart"] ?? []).some((e) => isOurs(e))

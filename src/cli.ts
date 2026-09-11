@@ -4,6 +4,7 @@ import {
   loadEffectivePolicy,
   validatePolicy,
   compile,
+  denyReadTargets,
   BASELINE,
   userPolicyPath,
 } from "./policy.js";
@@ -138,6 +139,12 @@ function rulesCmd(): void {
     process.stdout.write(
       `  ${src} ${pc.bold(r.id)} (${r.class}) — ${r.description}\n`,
     );
+    const targets = denyReadTargets(r);
+    if (targets.length > 0) {
+      process.stdout.write(
+        `      ${pc.dim(`native read deny: ${targets.join(", ")}`)}\n`,
+      );
+    }
   }
   if (eff.disabled.length)
     process.stdout.write(

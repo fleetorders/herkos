@@ -66,6 +66,18 @@ permitted`. This half is seamless and arguably stronger than a hook. For
   once** to activate fetched-code blocking (credential denies are live
   immediately). Requires Codex ≥ 0.146.
 
+On Claude Code the credential rules are also written into the harness's **own
+permission deny rules** (`permissions.deny` in its settings), generated from the
+same policy so the two layers cannot disagree. A deny rule holds in every mode,
+blocks through a symlink as well as its target, and covers the file commands the
+harness recognises inside Bash; the hook covers what deny rules miss (a shell
+wrapper, a program called by its full path). Targets are precise where that is
+cheap — the SSH `id_*` key files, not the whole directory, so `known_hosts` and
+the client config stay readable. herkos records which entries it added, never
+claims an identical entry you already had, and `uninstall` removes exactly its
+own. Command-shaped rules never become deny rules: denying a command prefix
+would refuse every legitimate use of that program.
+
 Adding a harness is adding an adapter, not redesigning — the policy never changes.
 
 ## It tells you every session whether it is actually on
