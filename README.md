@@ -86,6 +86,15 @@ claims an identical entry you already had, and `uninstall` removes exactly its
 own. Command-shaped rules never become deny rules: denying a command prefix
 would refuse every legitimate use of that program.
 
+If you run Claude Code with its **OS sandbox** on, the credential paths are also
+in the sandbox's own credential list (`sandbox.credentials.files`, mode `deny`),
+enforced by the operating system for every shell command and its child
+processes. herkos never switches the sandbox on: when it is off, the entries are
+inert and `status` says the credential rules rest on the deny rules and the
+hook. That list takes paths, not globs; a glob such as the SSH key-file pattern
+still reaches the sandbox, because Claude Code merges `Read(…)` deny rules into
+the sandbox's read-deny list (per its settings schema, as of 2.1.268).
+
 Adding a harness is adding an adapter, not redesigning — the policy never changes.
 
 ## It tells you every session whether it is actually on

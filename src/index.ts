@@ -40,6 +40,7 @@ export {
   sessionStartHookPath,
   policySnapshotPath,
   claudeDenyRules,
+  claudeSandboxCredentialFiles,
   ownedSettingsPath,
   blockLogPath,
 } from "./adapters/claude-code.js";

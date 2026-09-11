@@ -84,6 +84,12 @@ interface OwnedSettings {
   createdPermissions: boolean;
   /** herkos created permissions.deny — drop it once it is empty. */
   createdDeny: boolean;
+  /** sandbox.credentials.files paths herkos added (always mode "deny"). */
+  credentialFiles: string[];
+  /** herkos created sandbox / sandbox.credentials / its files list — drop each once empty. */
+  createdSandbox: boolean;
+  createdCredentials: boolean;
+  createdFiles: boolean;
 }
 
 function readOwned(): OwnedSettings {
@@ -97,9 +103,23 @@ function readOwned(): OwnedSettings {
         : [],
       createdPermissions: o.createdPermissions === true,
       createdDeny: o.createdDeny === true,
+      credentialFiles: Array.isArray(o.credentialFiles)
+        ? o.credentialFiles.filter((d): d is string => typeof d === "string")
+        : [],
+      createdSandbox: o.createdSandbox === true,
+      createdCredentials: o.createdCredentials === true,
+      createdFiles: o.createdFiles === true,
     };
   } catch {
-    return { deny: [], createdPermissions: false, createdDeny: false };
+    return {
+      deny: [],
+      createdPermissions: false,
+      createdDeny: false,
+      credentialFiles: [],
+      createdSandbox: false,
+      createdCredentials: false,
+      createdFiles: false,
+    };
   }
 }
 
@@ -127,6 +147,75 @@ export function claudeDenyRules(policy: CompiledPolicy): string[] {
 /** One read-deny target as a Claude Code permission rule. */
 function denyRuleFor(target: string): string {
   return `Read(${target.startsWith("/") && !target.startsWith("//") ? `/${target}` : target})`;
+}
+
+/**
+ * The concrete credential paths a policy compiles to for the OS sandbox's own
+ * credential list, `sandbox.credentials.files` with mode "deny". Its schema
+ * takes a file or directory path — absolute or `~`-expanded — not a glob, so a
+ * target ending in `/**` contributes its directory and any other glob is left
+ * out. Globs are not lost: Claude Code merges `Read(...)` deny permission rules
+ * into the sandbox's own read-deny list (stated in its settings schema as of
+ * 2.1.268), so they reach the OS layer through the rules herkos already writes.
+ * A relative target is left out too: here it would resolve against the settings
+ * directory, not the project.
+ */
+export function claudeSandboxCredentialFiles(policy: CompiledPolicy): string[] {
+  const out: string[] = [];
+  for (const r of policy.rules) {
+    for (const t of r.denyRead) {
+      const dir = t.endsWith("/**") ? t.slice(0, -3) : t;
+      if (!(dir.startsWith("~/") || dir.startsWith("/"))) continue;
+      if (/[*?[\]{}]/.test(dir)) continue;
+      const p = dir.startsWith("//") ? dir.slice(1) : dir;
+      if (!out.includes(p)) out.push(p);
+    }
+  }
+  return out;
+}
+
+/** The `path` of a sandbox credential entry, if it is one. */
+function entryPath(x: unknown): string | undefined {
+  const p = (x as { path?: unknown } | null)?.path;
+  return typeof x === "object" && x !== null && typeof p === "string"
+    ? p
+    : undefined;
+}
+
+/** A credential entry herkos could have written: a path with mode "deny". */
+function isDenyEntry(x: unknown): x is { path: string; mode: "deny" } {
+  return (
+    entryPath(x) !== undefined && (x as { mode?: unknown }).mode === "deny"
+  );
+}
+
+/** Drop sandbox containers herkos created once they hold nothing. */
+function tidySandbox(
+  settings: Record<string, unknown>,
+  owned: OwnedSettings,
+): boolean {
+  const sandbox = settings["sandbox"];
+  if (typeof sandbox !== "object" || sandbox === null) return false;
+  const sb = sandbox as Record<string, unknown>;
+  let changed = false;
+  const creds = sb["credentials"];
+  if (typeof creds === "object" && creds !== null) {
+    const c = creds as Record<string, unknown>;
+    const files = c["files"];
+    if (owned.createdFiles && Array.isArray(files) && files.length === 0) {
+      delete c["files"];
+      changed = true;
+    }
+    if (owned.createdCredentials && Object.keys(c).length === 0) {
+      delete sb["credentials"];
+      changed = true;
+    }
+  }
+  if (owned.createdSandbox && Object.keys(sb).length === 0) {
+    delete settings["sandbox"];
+    changed = true;
+  }
+  return changed;
 }
 
 /** Drop permission containers herkos created once they hold nothing. */
@@ -571,10 +660,45 @@ export const claudeCodeAdapter: HarnessAdapter = {
       deny: added,
       createdPermissions: owned.createdPermissions || !hadPerms,
       createdDeny: owned.createdDeny || !hadDeny,
+      credentialFiles: [],
+      createdSandbox: owned.createdSandbox,
+      createdCredentials: owned.createdCredentials,
+      createdFiles: owned.createdFiles,
     };
     permissions["deny"] = deny;
     settings["permissions"] = permissions;
     tidyPermissions(settings, nowOwned);
+
+    // 5. Credential files into the OS sandbox's own credential list. Turning the
+    //    sandbox on is the user's call: herkos writes the entries and never
+    //    touches `sandbox.enabled`. The entries are inert while it is off and
+    //    hold from the first command once it is on.
+    const rawSandbox = settings["sandbox"];
+    const hadSandbox = typeof rawSandbox === "object" && rawSandbox !== null;
+    const sandbox = (hadSandbox ? rawSandbox : {}) as Record<string, unknown>;
+    const rawCreds = sandbox["credentials"];
+    const hadCreds = typeof rawCreds === "object" && rawCreds !== null;
+    const creds = (hadCreds ? rawCreds : {}) as Record<string, unknown>;
+    const hadFiles = Array.isArray(creds["files"]);
+    const files = (hadFiles ? (creds["files"] as unknown[]) : []).filter(
+      (f) => !(isDenyEntry(f) && owned.credentialFiles.includes(f.path)),
+    );
+    const credentialPaths = claudeSandboxCredentialFiles(policy);
+    for (const p of credentialPaths) {
+      // The user's own entry for a path wins, whatever its mode.
+      if (files.some((f) => entryPath(f) === p)) continue;
+      files.push({ path: p, mode: "deny" });
+      nowOwned.credentialFiles.push(p);
+    }
+    nowOwned.createdSandbox = owned.createdSandbox || !hadSandbox;
+    nowOwned.createdCredentials = owned.createdCredentials || !hadCreds;
+    nowOwned.createdFiles = owned.createdFiles || !hadFiles;
+    creds["files"] = files;
+    sandbox["credentials"] = creds;
+    settings["sandbox"] = sandbox;
+    tidySandbox(settings, nowOwned);
+    const sandboxOn = sandbox["enabled"] === true;
+
     fs.writeFileSync(
       ownedSettingsPath(),
       JSON.stringify(nowOwned, null, 2) + "\n",
@@ -588,7 +712,7 @@ export const claudeCodeAdapter: HarnessAdapter = {
 
     return {
       changed,
-      detail: `hook generated (${policy.ruleCount} rules, stamp ${stampOf(policy)}) and registered on PreToolUse for every tool; ${claudeDenyRules(policy).length} credential read(s) added to permissions.deny; a session-start line reports enforcement each session. Takes effect for sessions started from now on.`,
+      detail: `hook generated (${policy.ruleCount} rules, stamp ${stampOf(policy)}) and registered on PreToolUse for every tool; ${claudeDenyRules(policy).length} credential read(s) added to permissions.deny; ${credentialPaths.length} credential path(s) in sandbox.credentials.files (${sandboxOn ? "OS sandbox on" : "the OS sandbox is OFF in these settings — herkos never turns it on; the entries take effect if you do"}); a session-start line reports enforcement each session. Takes effect for sessions started from now on.`,
     };
   },
 
@@ -630,6 +754,29 @@ export const claudeCodeAdapter: HarnessAdapter = {
         }
       }
       if (tidyPermissions(settings, owned)) touched = true;
+      const sb = settings["sandbox"];
+      const credsU =
+        typeof sb === "object" && sb !== null
+          ? (sb as Record<string, unknown>)["credentials"]
+          : undefined;
+      if (
+        typeof credsU === "object" &&
+        credsU !== null &&
+        owned.credentialFiles.length > 0
+      ) {
+        const c = credsU as Record<string, unknown>;
+        const list = c["files"];
+        if (Array.isArray(list)) {
+          const kept = list.filter(
+            (f) => !(isDenyEntry(f) && owned.credentialFiles.includes(f.path)),
+          );
+          if (kept.length !== list.length) {
+            c["files"] = kept;
+            touched = true;
+          }
+        }
+      }
+      if (tidySandbox(settings, owned)) touched = true;
       if (touched) {
         if (Object.keys(hooks).length === 0) delete settings["hooks"];
         else settings["hooks"] = hooks;
@@ -656,6 +803,8 @@ export const claudeCodeAdapter: HarnessAdapter = {
 
   coverage(policy: CompiledPolicy): RuleCoverage[] {
     let deny: unknown[] = [];
+    let credentialEntries: unknown[] = [];
+    let sandboxOn = false;
     let hookRegistered = false;
     try {
       const s = JSON.parse(
@@ -663,8 +812,13 @@ export const claudeCodeAdapter: HarnessAdapter = {
       ) as {
         permissions?: { deny?: unknown };
         hooks?: { PreToolUse?: unknown };
+        sandbox?: { enabled?: unknown; credentials?: { files?: unknown } };
       };
-      if (Array.isArray(s.permissions?.deny)) deny = s.permissions.deny;
+      const rawDeny = s.permissions?.deny;
+      if (Array.isArray(rawDeny)) deny = rawDeny;
+      const rawFiles = s.sandbox?.credentials?.files;
+      if (Array.isArray(rawFiles)) credentialEntries = rawFiles;
+      sandboxOn = s.sandbox?.enabled === true;
       hookRegistered = JSON.stringify(s.hooks?.PreToolUse ?? []).includes(
         hookPath(),
       );
@@ -675,9 +829,18 @@ export const claudeCodeAdapter: HarnessAdapter = {
     return policy.rules.map((r) => {
       const layers: string[] = [];
       const targets = r.denyRead.map(denyRuleFor);
-      if (targets.length > 0 && targets.every((t) => deny.includes(t))) {
-        layers.push("permission deny rules");
+      const denyHeld =
+        targets.length > 0 && targets.every((t) => deny.includes(t));
+      const paths = claudeSandboxCredentialFiles({ ...policy, rules: [r] });
+      const filesHeld =
+        paths.length > 0 &&
+        paths.every((p) => credentialEntries.some((f) => entryPath(f) === p));
+      // Strongest first: the OS enforces the sandbox for every shell command
+      // and its children; it only exists while the user has it switched on.
+      if (sandboxOn && (denyHeld || filesHeld)) {
+        layers.push("OS sandbox for shell commands");
       }
+      if (denyHeld) layers.push("permission deny rules");
       if (hookLive && (r.pathRegex !== "" || r.commandRegexes.length > 0)) {
         layers.push("hook on every tool");
       }
@@ -758,6 +921,29 @@ export const claudeCodeAdapter: HarnessAdapter = {
     if (expected.length > 0) {
       notes.push(
         `${expected.length} credential deny rule(s) present in permissions.deny`,
+      );
+    }
+    const sb = settings["sandbox"] as
+      | { enabled?: unknown; credentials?: { files?: unknown } }
+      | undefined;
+    const rawFiles = sb?.credentials?.files;
+    const presentFiles = Array.isArray(rawFiles) ? rawFiles : [];
+    const wantFiles = claudeSandboxCredentialFiles(current);
+    const missingFiles = wantFiles.filter(
+      (p) => !presentFiles.some((f) => entryPath(f) === p),
+    );
+    if (missingFiles.length > 0) {
+      return {
+        ok: false,
+        state: "stale",
+        detail: `${missingFiles.length} of ${wantFiles.length} credential path(s) missing from sandbox.credentials.files in ${sp}: ${missingFiles.join(", ")} — run 'herkos init'`,
+      };
+    }
+    if (wantFiles.length > 0) {
+      notes.push(
+        sb?.enabled === true
+          ? `OS sandbox on: ${wantFiles.length} credential path(s) denied, and the deny rules merged into its read-deny list`
+          : `OS sandbox not enabled in ${sp} — herkos never turns it on, so credential reads rest on the deny rules and the hook (a project or managed setting may still enable it)`,
       );
     }
     notes.push(

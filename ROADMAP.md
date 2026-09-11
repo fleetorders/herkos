@@ -18,6 +18,9 @@ than left to rot. What exists today is described in the README, not here.
 - Codex rules live without the trust step — **done** for prefix-shaped command
   rules (execpolicy `forbidden`, checked by Codex before install); `status`
   names which layer holds each rule on each harness.
+- Credential reads in the OS sandbox — **done** for Claude Code
+  (`sandbox.credentials.files`, never switching the sandbox on; `status` says
+  when it is off).
 - Adapters for more harnesses (the policy is harness-agnostic; each is a new
   adapter behind the shared interface).
 - A guided `herkos init` that reports, per harness, exactly what it can and
