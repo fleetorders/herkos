@@ -15,6 +15,9 @@ than left to rot. What exists today is described in the README, not here.
   only what herkos added.
 - A record of what was refused — **done**: a blocked-call log without command
   text, per-rule counts in `status`.
+- Codex rules live without the trust step — **done** for prefix-shaped command
+  rules (execpolicy `forbidden`, checked by Codex before install); `status`
+  names which layer holds each rule on each harness.
 - Adapters for more harnesses (the policy is harness-agnostic; each is a new
   adapter behind the shared interface).
 - A guided `herkos init` that reports, per harness, exactly what it can and

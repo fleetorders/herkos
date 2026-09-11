@@ -64,7 +64,15 @@ permitted`. This half is seamless and arguably stronger than a hook. For
   fetched-code, herkos installs the same shell hook into Codex's `PreToolUse`, but
   non-managed Codex hooks require a one-time trust step — **run `/hooks` in Codex
   once** to activate fetched-code blocking (credential denies are live
-  immediately). Requires Codex ≥ 0.146.
+  immediately). Requires Codex ≥ 0.146. Command rules that are genuinely
+  prefixes — the keychain dumps — are also compiled into Codex's own execpolicy
+  as `forbidden` rules, which load at startup with **no trust step**. Codex
+  checks the generated file before herkos installs it; a file it refuses
+  installs nothing. The hook still covers what a prefix rule cannot see, such
+  as a program called by its full path.
+
+`herkos status` names, per harness, which layer holds each rule, and lists any
+rule no layer holds as **NOT enforced here**.
 
 On Claude Code the credential rules are also written into the harness's **own
 permission deny rules** (`permissions.deny` in its settings), generated from the

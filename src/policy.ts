@@ -29,6 +29,16 @@ export interface Rule {
   /** Extended regexes matched against command text (fetched-exec / command-shaped rules). */
   commandPatterns?: string[];
   /**
+   * Command prefixes as argument tokens, program first (`["git", "push"]`).
+   * A harness with a native prefix-rule layer enforces these directly — on
+   * Codex that layer needs no trust step, unlike its hooks. Only a rule that
+   * genuinely IS a prefix belongs here: a pipeline such as fetched code piped
+   * to a shell cannot be one without forbidding the shell outright. When a
+   * rule has prefixes but no `commandPatterns`, the hook's patterns are derived
+   * from them, so every harness still enforces the rule.
+   */
+  commandPrefixes?: string[][];
+  /**
    * Concrete deny targets for OS-level filesystem-deny adapters (Codex permission
    * profiles). Home/absolute paths ("~/.ssh", "/etc/x") go in the filesystem
    * table; glob entries (containing "*", e.g. "**\/.env*") go under
@@ -150,6 +160,12 @@ export const BASELINE: Rule[] = [
     id: "macos-keychain",
     class: "fetched-exec",
     description: "macOS keychain credential dumps (holds OS-level secrets)",
+    commandPrefixes: [
+      ["security", "dump-keychain"],
+      ["security", "find-generic-password"],
+      ["security", "find-internet-password"],
+      ["security", "export"],
+    ],
     commandPatterns: [
       "security[[:space:]]+(dump-keychain|find-generic-password|find-internet-password|export)",
     ],
@@ -229,6 +245,7 @@ const KNOWN_RULE_KEYS: readonly string[] = [
   "description",
   "paths",
   "commandPatterns",
+  "commandPrefixes",
   "codexDeny",
   "denyRead",
 ];
@@ -296,6 +313,29 @@ function checkEntries(
   });
 }
 
+/** Each prefix must be a non-empty list of non-empty single-line tokens. */
+function checkPrefixes(rid: string, prefixes: unknown, errors: string[]): void {
+  if (prefixes === undefined) return;
+  if (!Array.isArray(prefixes)) {
+    errors.push(`rule ${rid}: commandPrefixes must be a list of token lists`);
+    return;
+  }
+  prefixes.forEach((prefix, i) => {
+    const n = i + 1;
+    if (
+      !Array.isArray(prefix) ||
+      prefix.length === 0 ||
+      !prefix.every(
+        (t) => typeof t === "string" && t.length > 0 && !/[\r\n]/.test(t),
+      )
+    ) {
+      errors.push(
+        `rule ${rid}: commandPrefixes entry ${n} must be a non-empty list of single-line, non-empty strings (program first)`,
+      );
+    }
+  });
+}
+
 /** Validate an effective policy: errors block wiring; warnings just inform. */
 export function validatePolicy(policy: EffectivePolicy): ValidationResult {
   const errors: string[] = [];
@@ -321,10 +361,15 @@ export function validatePolicy(policy: EffectivePolicy): ValidationResult {
       errors.push(`rule ${rid}: unknown class "${String(rule.class)}"`);
     }
     const hasPaths = (rule.paths ?? []).length > 0;
-    const hasCmds = (rule.commandPatterns ?? []).length > 0;
+    const hasCmds =
+      (rule.commandPatterns ?? []).length > 0 ||
+      (rule.commandPrefixes ?? []).length > 0;
     if (!hasPaths && !hasCmds) {
-      errors.push(`rule ${rid}: has neither paths nor commandPatterns`);
+      errors.push(
+        `rule ${rid}: has neither paths nor commandPatterns nor commandPrefixes`,
+      );
     }
+    checkPrefixes(rid, rule.commandPrefixes, errors);
     checkEntries(rid, "paths", rule.paths, errors);
     checkEntries(rid, "commandPatterns", rule.commandPatterns, errors);
     checkEntries(rid, "codexDeny", rule.codexDeny, errors);
@@ -375,6 +420,8 @@ export interface CompiledRule {
   pathRegex: string;
   /** This rule's extended regexes for command text. */
   commandRegexes: string[];
+  /** Argument-token prefixes for native prefix-rule layers (Codex execpolicy). */
+  commandPrefixes: string[][];
   /** Gitignore-style read-deny targets for harness-native layers (see denyReadTargets). */
   denyRead: string[];
 }
@@ -421,6 +468,7 @@ export function policyFingerprint(rules: CompiledRule[]): string {
       r.description,
       r.pathRegex,
       r.commandRegexes,
+      r.commandPrefixes,
       r.denyRead,
     ]),
   );
@@ -482,13 +530,28 @@ export function denyReadTargets(rule: Rule): string[] {
   return out;
 }
 
+/**
+ * The hook's pattern for a rule that is only a prefix: the tokens in order,
+ * separated by whitespace, starting where a program name can start (line start,
+ * or after a separator or a path slash — so `/usr/bin/x` counts) and ending at
+ * a token boundary. Lets one declared prefix be enforced by the hook on every
+ * harness and by a native prefix layer where one exists.
+ */
+export function prefixRegex(tokens: string[]): string {
+  return `(^|[^[:alnum:]_.-])${tokens.map(escapeERE).join("[[:space:]]+")}([[:space:]]|$)`;
+}
+
 export function compile(policy: EffectivePolicy): CompiledPolicy {
   const rules: CompiledRule[] = policy.rules.map((r) => ({
     id: r.id,
     class: r.class,
     description: r.description,
     pathRegex: (r.paths ?? []).map(escapeERE).join("|"),
-    commandRegexes: [...(r.commandPatterns ?? [])],
+    commandRegexes:
+      (r.commandPatterns ?? []).length > 0
+        ? [...(r.commandPatterns ?? [])]
+        : (r.commandPrefixes ?? []).map(prefixRegex),
+    commandPrefixes: (r.commandPrefixes ?? []).map((p) => [...p]),
     denyRead: denyReadTargets(r),
   }));
   const classes: RuleClass[] = [];

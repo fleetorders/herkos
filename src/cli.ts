@@ -92,6 +92,28 @@ function statusCmd(): void {
           ? pc.green(a.name + ": protected")
           : pc.yellow(a.name + ": NOT wired");
     process.stdout.write(`  ${label} — ${v.detail}\n`);
+    // Which layer holds each rule: a harness with several enforcement points of
+    // different strength must say which one a rule actually rides.
+    if (a.coverage) {
+      const byLayer = new Map<string, string[]>();
+      const bare: string[] = [];
+      for (const c of a.coverage(compiled)) {
+        if (c.layers.length === 0) bare.push(c.rule);
+        for (const l of c.layers) {
+          byLayer.set(l, [...(byLayer.get(l) ?? []), c.rule]);
+        }
+      }
+      for (const [layer, rules] of byLayer) {
+        process.stdout.write(
+          `    ${pc.dim(`${layer}:`)} ${rules.join(", ")}\n`,
+        );
+      }
+      if (bare.length > 0) {
+        process.stdout.write(
+          `    ${pc.red("NOT enforced here:")} ${bare.join(", ")}\n`,
+        );
+      }
+    }
   }
   // What the guard has actually refused, per rule — the evidence for keeping,
   // narrowing or disabling a rule, and proof it ever fired at all.

@@ -9,6 +9,7 @@ export {
   userPolicyPath,
   herkosConfigDir,
   blockLogFile,
+  prefixRegex,
 } from "./policy.js";
 export { HERKOS_VERSION } from "./version.js";
 export type {
@@ -26,7 +27,9 @@ export type {
   DetectResult,
   WireResult,
   VerifyResult,
+  RuleCoverage,
 } from "./adapters/types.js";
+export { codexRulesFile, codexRulesPath } from "./adapters/codex.js";
 export {
   generateHook,
   generateSessionStartHook,

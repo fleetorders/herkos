@@ -22,6 +22,7 @@ import type {
   DetectResult,
   WireResult,
   VerifyResult,
+  RuleCoverage,
 } from "./types.js";
 
 const HOOK_MARK = "herkos-hook";
@@ -116,13 +117,16 @@ function readOwned(): OwnedSettings {
 export function claudeDenyRules(policy: CompiledPolicy): string[] {
   const out: string[] = [];
   for (const r of policy.rules) {
-    for (const t of r.denyRead) {
-      const target = t.startsWith("/") && !t.startsWith("//") ? `/${t}` : t;
-      const rule = `Read(${target})`;
+    for (const rule of r.denyRead.map(denyRuleFor)) {
       if (!out.includes(rule)) out.push(rule);
     }
   }
   return out;
+}
+
+/** One read-deny target as a Claude Code permission rule. */
+function denyRuleFor(target: string): string {
+  return `Read(${target.startsWith("/") && !target.startsWith("//") ? `/${target}` : target})`;
 }
 
 /** Drop permission containers herkos created once they hold nothing. */
@@ -648,6 +652,37 @@ export const claudeCodeAdapter: HarnessAdapter = {
       changed,
       detail: changed.length ? "herkos wiring removed" : "nothing to remove",
     };
+  },
+
+  coverage(policy: CompiledPolicy): RuleCoverage[] {
+    let deny: unknown[] = [];
+    let hookRegistered = false;
+    try {
+      const s = JSON.parse(
+        fs.readFileSync(settingsPath(detectConfigDir()), "utf8"),
+      ) as {
+        permissions?: { deny?: unknown };
+        hooks?: { PreToolUse?: unknown };
+      };
+      if (Array.isArray(s.permissions?.deny)) deny = s.permissions.deny;
+      hookRegistered = JSON.stringify(s.hooks?.PreToolUse ?? []).includes(
+        hookPath(),
+      );
+    } catch {
+      // No readable settings: nothing is wired.
+    }
+    const hookLive = hookRegistered && fs.existsSync(hookPath());
+    return policy.rules.map((r) => {
+      const layers: string[] = [];
+      const targets = r.denyRead.map(denyRuleFor);
+      if (targets.length > 0 && targets.every((t) => deny.includes(t))) {
+        layers.push("permission deny rules");
+      }
+      if (hookLive && (r.pathRegex !== "" || r.commandRegexes.length > 0)) {
+        layers.push("hook on every tool");
+      }
+      return { rule: r.id, layers };
+    });
   },
 
   verify(): VerifyResult {

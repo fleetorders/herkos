@@ -37,6 +37,16 @@ export interface VerifyResult {
   detail: string;
 }
 
+/** Which of a harness's enforcement layers hold one rule right now. */
+export interface RuleCoverage {
+  rule: string;
+  /**
+   * The layers currently wired that enforce this rule on this harness, strongest
+   * first. Empty means the rule is NOT enforced here, which `status` says out loud.
+   */
+  layers: string[];
+}
+
 export interface HarnessAdapter {
   /** Stable id, e.g. "claude-code". */
   id: string;
@@ -46,4 +56,10 @@ export interface HarnessAdapter {
   wire(policy: CompiledPolicy): WireResult;
   unwire(): WireResult;
   verify(): VerifyResult;
+  /**
+   * Per rule, which layers of the CURRENT wiring hold it — so coverage claims
+   * stay honest when a harness has several enforcement points of different
+   * strength. Reads installed state; never writes.
+   */
+  coverage?(policy: CompiledPolicy): RuleCoverage[];
 }
