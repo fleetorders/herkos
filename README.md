@@ -32,7 +32,10 @@ never-list:
 
 - **Credential reads** — SSH private keys, cloud credentials (AWS/GCP/Azure),
   Kubernetes config, `.env`-class files, `.netrc`/`.npmrc`/`.pypirc`, the GnuPG
-  private keyring, Docker auth, and macOS keychain dumps.
+  private keyring, Docker auth, and macOS keychain dumps. The committed
+  placeholder templates — `.env.example` and friends — are not blocked: they
+  hold no secrets by convention, and refusing everyday reads of them is the
+  kind of false alarm that gets a guard switched off.
 - **Fetched-code execution** — piping downloaded content straight into a shell
   (`curl … | sh`, `eval "$(curl …)"`).
 

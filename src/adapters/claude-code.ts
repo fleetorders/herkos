@@ -303,12 +303,14 @@ export function generateHook(policy: CompiledPolicy): string {
   // A block rule calls `enforce` (exit 2 on match); an open rule calls `notice`
   // (surface a message, never block). Both bodies take the subject as "$1" and
   // the kind as "$2", so the same baked lines serve every tool argument found.
-  //   enforce <id> <description> <kind> <subject> <regex> <message>
-  //   notice  <id> <message>     <kind> <subject> <regex>
+  //   enforce <id> <description> <kind> <subject> <regex> <exclude> <message>
+  //   notice  <id> <message>     <kind> <subject> <regex> <exclude>
+  // <exclude> is the rule's notPaths alternation ("" for none): a subject it
+  // matches — the committed .env templates — never fires the rule.
   const line = (rule: CompiledRule, re: string): string =>
     rule.disposition === "open"
-      ? `  notice ${shQuote(rule.id)} ${shQuote(rule.message || rule.description)} "$2" "$1" ${shQuote(re)}`
-      : `  enforce ${shQuote(rule.id)} ${shQuote(rule.description)} "$2" "$1" ${shQuote(re)} ${shQuote(rule.message)}`;
+      ? `  notice ${shQuote(rule.id)} ${shQuote(rule.message || rule.description)} "$2" "$1" ${shQuote(re)} ${shQuote(rule.notPathRegex)}`
+      : `  enforce ${shQuote(rule.id)} ${shQuote(rule.description)} "$2" "$1" ${shQuote(re)} ${shQuote(rule.notPathRegex)} ${shQuote(rule.message)}`;
   const pathLine = (rule: CompiledRule): string =>
     rule.pathRegex === "" ? "" : line(rule, rule.pathRegex);
 
@@ -387,19 +389,22 @@ log_block() {
   } 2>/dev/null || true
 }
 
-# enforce ID DESCRIPTION KIND SUBJECT REGEX — grep the subject against one
-# compiled pattern. Match → block, naming the rule. No match → fall through.
-# grep itself failing (bad regex, exit >= 2) degrades LOUDLY: that one rule is
-# off for this call and the session keeps working; every other rule stays
-# enforced. Never exit 2 because of a grep error.
+# enforce ID DESCRIPTION KIND SUBJECT REGEX EXCLUDE MESSAGE — grep the subject
+# against one compiled pattern, unless it matches EXCLUDE (the rule's own
+# benign-spelling exclusions, "" for none), in which case the rule never fires.
+# Match → block, naming the rule. No match → fall through. grep itself failing
+# (bad regex, exit >= 2) degrades LOUDLY: that one rule is off for this call
+# and the session keeps working; every other rule stays enforced. Never exit 2
+# because of a grep error.
 enforce() {
   [ -n "$5" ] || return 0
+  if [ -n "$6" ] && printf '%s' "$4" | grep -Eq -e "$6"; then return 0; fi
   printf '%s' "$4" | grep -Eq -e "$5"
   rc=$?
   if [ "$rc" -eq 0 ]; then
     log_block "$1"
     _m="BLOCKED (herkos) rule $1 — $2. This $3 is on the never-list. To adjust: narrow the rule in $POLICY_FILE or disable it by id; 'herkos rules' lists the policy."
-    [ -n "$6" ] && _m="$_m $6"
+    [ -n "$7" ] && _m="$_m $7"
     block "$_m"
   fi
   if [ "$rc" -ge 2 ]; then
@@ -407,11 +412,13 @@ enforce() {
   fi
 }
 
-# notice ID MESSAGE KIND SUBJECT REGEX — an OPEN rule: surface the message to
-# the session on a match and let the call THROUGH. Never blocks, never changes
-# the exit code, and a grep error just means no notice for this call.
+# notice ID MESSAGE KIND SUBJECT REGEX EXCLUDE — an OPEN rule: surface the
+# message to the session on a match and let the call THROUGH. Never blocks,
+# never changes the exit code, and a grep error just means no notice for this
+# call.
 notice() {
   [ -n "$5" ] || return 0
+  if [ -n "$6" ] && printf '%s' "$4" | grep -Eq -e "$6" 2>/dev/null; then return 0; fi
   if printf '%s' "$4" | grep -Eq -e "$5" 2>/dev/null; then
     printf 'herkos NOTICE (rule %s): %s\\n' "$1" "$2" >&2
   fi

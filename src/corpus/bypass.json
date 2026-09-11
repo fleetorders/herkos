@@ -316,6 +316,18 @@
       },
       "hook": "pass",
       "heldBy": []
+    },
+    {
+      "id": "benign-dotenv-template",
+      "rule": "dotenv-files",
+      "benign": true,
+      "note": "a committed placeholder template; convention holds it secret-free and everyday work reads and writes it",
+      "payload": {
+        "tool_name": "Read",
+        "tool_input": { "file_path": "app/.env.example" }
+      },
+      "hook": "pass",
+      "heldBy": []
     }
   ]
 }

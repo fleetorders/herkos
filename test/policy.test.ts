@@ -181,6 +181,90 @@ describe("policy validation", () => {
   });
 });
 
+describe("the .env templates are not refused (D-003: a false positive teaches users to disable the guard)", () => {
+  const scriptPath = writeHook(generateHook(compile(loadEffectivePolicy())));
+
+  it("passes Read, Write and cat of every committed template spelling", () => {
+    for (const t of ["app/.env.example", "app/.env.sample", "docs/.env.template"]) {
+      expect(
+        fireHook(
+          scriptPath,
+          JSON.stringify({ tool_name: "Read", tool_input: { file_path: t } }),
+        ).exit,
+      ).toBe(0);
+      expect(
+        fireHook(
+          scriptPath,
+          JSON.stringify({ tool_name: "Write", tool_input: { file_path: t } }),
+        ).exit,
+      ).toBe(0);
+    }
+    expect(fireHook(scriptPath, bashPayload("cat app/.env.example")).exit).toBe(
+      0,
+    );
+  });
+
+  it("still blocks .env, .env.local and .env.production", () => {
+    for (const f of ["app/.env", "app/.env.local", "app/.env.production"]) {
+      expect(
+        fireHook(
+          scriptPath,
+          JSON.stringify({ tool_name: "Read", tool_input: { file_path: f } }),
+        ).exit,
+      ).toBe(2);
+    }
+    expect(
+      fireHook(scriptPath, bashPayload("cat app/.env.production")).exit,
+    ).toBe(2);
+  });
+
+  it("excludes only a template at the END of the value — a secret beside it still blocks", () => {
+    // Ends with the secret, so the template earlier does not mute the rule.
+    expect(
+      fireHook(
+        scriptPath,
+        bashPayload("diff app/.env.example app/.env.production"),
+      ).exit,
+    ).toBe(2);
+  });
+});
+
+describe("notPaths exclusions", () => {
+  const ruleWith = (extra: Record<string, unknown>): EffectivePolicy => ({
+    rules: [
+      ...BASELINE,
+      {
+        id: "test-rule",
+        class: "fetched-exec",
+        description: "test",
+        commandPatterns: ["nothing-matches-this"],
+        ...extra,
+      } as unknown as Rule,
+    ],
+    disabled: [],
+    userPolicyPath: "/tmp/herkos-test-policy.json",
+    userPolicyLoaded: false,
+  });
+
+  it("are validated as regexes by the evaluator itself", () => {
+    const v = validatePolicy(ruleWith({ notPaths: ["foo("] }));
+    expect(
+      v.errors.some(
+        (e) => e.includes("test-rule") && e.includes("not a valid extended regex"),
+      ),
+    ).toBe(true);
+  });
+
+  it("make the rule's own match examples honest — an excluded spelling is not matched", () => {
+    const v = validatePolicy(
+      ruleWith({ paths: ["/.env"], notPaths: ["\\.env\\.example$"], match: ["app/.env.example"] }),
+    );
+    expect(
+      v.errors.some((e) => e.includes("is not matched by the rule")),
+    ).toBe(true);
+  });
+});
+
 describe("quoting hardening (single quote in a pattern)", () => {
   const eff: EffectivePolicy = {
     rules: [
@@ -227,6 +311,7 @@ describe("degradation on an invalid regex baked past validation", () => {
         disposition: "block",
         message: "",
         pathRegex: "",
+        notPathRegex: "",
         commandRegexes: ["foo("],
         denyRead: [],
         commandPrefixes: [],
@@ -238,6 +323,7 @@ describe("degradation on an invalid regex baked past validation", () => {
         disposition: "block",
         message: "",
         pathRegex: "",
+        notPathRegex: "",
         commandRegexes: curlRule.commandPatterns ?? [],
         denyRead: [],
         commandPrefixes: [],

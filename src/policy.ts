@@ -51,6 +51,15 @@ export interface Rule {
   message?: string;
   /** Path fragments matched as substrings against file paths AND command text (credential-read). */
   paths?: string[];
+  /**
+   * Extended regexes that UN-match: a path or command text that matches any of
+   * these never fires this rule, even when its `paths` fragment does. The escape
+   * hatch for a fragment that is right in general and wrong for a well-known
+   * benign spelling — the committed `.env` templates. Raw regexes (not escaped
+   * fragments) evaluated by the same `grep -E` as command patterns, so `$`
+   * anchors at the end of the value.
+   */
+  notPaths?: string[];
   /** Extended regexes matched against command text (fetched-exec / command-shaped rules). */
   commandPatterns?: string[];
   /**
@@ -112,6 +121,34 @@ export interface EffectivePolicy {
 }
 
 /**
+ * The dotenv rule's real secret variants for the harness-native deny layers
+ * (gitignore-style globs cannot say "everything except the templates", so the
+ * conventional set is listed and the hook holds the general case): the file
+ * itself, the framework-documented per-environment files and their `.local`
+ * composites (Next.js / CRA / Vite conventions), and the common short
+ * environment spellings. The committed placeholder templates — `.env.example`,
+ * `.env.sample`, `.env.template`, `.env.dist` — hold no secrets by convention
+ * and are deliberately absent.
+ */
+const DOTENV_DENY = [
+  "**/.env",
+  "**/.env.local",
+  "**/.env.development",
+  "**/.env.development.local",
+  "**/.env.production",
+  "**/.env.production.local",
+  "**/.env.test",
+  "**/.env.test.local",
+  "**/.env.staging",
+  "**/.env.dev",
+  "**/.env.prod",
+  "**/.env.qa",
+  "**/.env.uat",
+  "**/.env.preview",
+  "**/.env.secret",
+];
+
+/**
  * The baseline never-list. Curation bar: near-universally never-legitimate for
  * an agent session; a false positive in a default rule teaches users to disable
  * the guard, which is worse than no guard. Grow this list slowly.
@@ -160,8 +197,12 @@ export const BASELINE: Rule[] = [
       "Environment files that conventionally hold secrets (.env and variants)",
     // Matched as path fragments: covers .env, .env.local, .env.production, etc.
     paths: ["/.env"],
-    codexDeny: ["**/.env", "**/.env.*"],
-    denyRead: ["**/.env", "**/.env.*"],
+    // ...except the committed placeholder templates, which convention holds to
+    // be secret-free and which everyday work reads and writes (D-003: a false
+    // positive in a default rule trains users to disable the guard).
+    notPaths: ["\\.env\\.(example|sample|template|dist)$"],
+    codexDeny: DOTENV_DENY,
+    denyRead: DOTENV_DENY,
   },
   {
     id: "token-rc-files",
@@ -280,6 +321,7 @@ const KNOWN_RULE_KEYS: readonly string[] = [
   "class",
   "description",
   "paths",
+  "notPaths",
   "commandPatterns",
   "commandPrefixes",
   "disposition",
@@ -311,7 +353,7 @@ function grepAccepts(pattern: string): { ok: boolean; detail: string } {
 
 function checkEntries(
   rid: string,
-  key: "paths" | "commandPatterns" | "codexDeny" | "denyRead",
+  key: "paths" | "notPaths" | "commandPatterns" | "codexDeny" | "denyRead",
   entries: unknown,
   errors: string[],
 ): void {
@@ -341,8 +383,9 @@ function checkEntries(
       return;
     }
     // Path fragments are regex-escaped before they reach grep, so only raw
-    // command patterns need the evaluator's own verdict.
-    if (key === "commandPatterns") {
+    // regexes — command patterns and notPaths exclusions — need the
+    // evaluator's own verdict.
+    if (key === "commandPatterns" || key === "notPaths") {
       const g = grepAccepts(entry);
       if (!g.ok) {
         errors.push(
@@ -378,6 +421,16 @@ function checkPrefixes(rid: string, prefixes: unknown, errors: string[]): void {
 
 /** Does this rule match the text, by the hook's own evaluator (`grep -E`)? */
 function ruleMatches(rule: Rule, text: string): boolean {
+  const grep = (re: string): boolean =>
+    spawnSync("grep", ["-E", "-q", "-e", re], {
+      input: text,
+      encoding: "utf8",
+      timeout: 5_000,
+    }).status === 0;
+  // An exclusion the example matches means the rule never fires for it, the
+  // same as in the hook.
+  const notPaths = rule.notPaths ?? [];
+  if (notPaths.length > 0 && grep(notPaths.join("|"))) return false;
   const paths = rule.paths ?? [];
   const regexes = [
     ...(paths.length > 0 ? [paths.map(escapeERE).join("|")] : []),
@@ -385,14 +438,7 @@ function ruleMatches(rule: Rule, text: string): boolean {
       ? (rule.commandPatterns ?? [])
       : (rule.commandPrefixes ?? []).map(prefixRegex)),
   ];
-  return regexes.some(
-    (re) =>
-      spawnSync("grep", ["-E", "-q", "-e", re], {
-        input: text,
-        encoding: "utf8",
-        timeout: 5_000,
-      }).status === 0,
-  );
+  return regexes.some(grep);
 }
 
 /** Run a rule's `match` / `notMatch` examples against the rule itself. */
@@ -481,6 +527,7 @@ export function validatePolicy(policy: EffectivePolicy): ValidationResult {
     checkPrefixes(rid, rule.commandPrefixes, errors);
     const beforeMatchers = errors.length;
     checkEntries(rid, "paths", rule.paths, errors);
+    checkEntries(rid, "notPaths", rule.notPaths, errors);
     checkEntries(rid, "commandPatterns", rule.commandPatterns, errors);
     checkEntries(rid, "codexDeny", rule.codexDeny, errors);
     checkEntries(rid, "denyRead", rule.denyRead, errors);
@@ -534,6 +581,8 @@ export interface CompiledRule {
   message: string;
   /** POSIX extended regex alternation of this rule's escaped path fragments ("" if none). */
   pathRegex: string;
+  /** This rule's exclusion regexes joined into one alternation ("" if none) — a subject it matches never fires the rule. */
+  notPathRegex: string;
   /** This rule's extended regexes for command text. */
   commandRegexes: string[];
   /** Argument-token prefixes for native prefix-rule layers (Codex execpolicy). */
@@ -585,6 +634,7 @@ export function policyFingerprint(rules: CompiledRule[]): string {
       r.disposition,
       r.message,
       r.pathRegex,
+      r.notPathRegex,
       r.commandRegexes,
       r.commandPrefixes,
       r.denyRead,
@@ -667,6 +717,7 @@ export function compile(policy: EffectivePolicy): CompiledPolicy {
     disposition: r.disposition === "open" ? "open" : "block",
     message: r.message ?? "",
     pathRegex: (r.paths ?? []).map(escapeERE).join("|"),
+    notPathRegex: (r.notPaths ?? []).join("|"),
     commandRegexes:
       (r.commandPatterns ?? []).length > 0
         ? [...(r.commandPatterns ?? [])]

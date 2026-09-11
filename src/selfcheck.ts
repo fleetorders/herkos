@@ -96,6 +96,15 @@ export const CASES: CheckCase[] = [
       tool_input: { file_path: "project/src/index.ts" },
     }),
   },
+  {
+    name: "passes the committed .env.example template",
+    rule: "dotenv-files",
+    wantExit: 0,
+    payload: JSON.stringify({
+      tool_name: "Read",
+      tool_input: { file_path: "project/.env.example" },
+    }),
+  },
 ];
 
 export interface CheckResult {
