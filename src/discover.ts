@@ -325,7 +325,14 @@ export async function discoverCommand(
   },
   home: string = os.homedir(),
 ): Promise<void> {
-  const effective = loadEffectivePolicy();
+  let effective: EffectivePolicy;
+  try {
+    effective = loadEffectivePolicy();
+  } catch (e) {
+    // A corrupt policy file is a typo, not a stack trace.
+    process.stdout.write(`herkos: ${(e as Error).message}\n`);
+    process.exit(1);
+  }
   const found = discoverCandidates(effective, home);
 
   if (opts.add) {

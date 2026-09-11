@@ -8,7 +8,7 @@ import {
   BASELINE,
   userPolicyPath,
 } from "./policy.js";
-import type { ValidationResult } from "./policy.js";
+import type { EffectivePolicy, ValidationResult } from "./policy.js";
 import { ADAPTERS, detectInstalled } from "./adapters/index.js";
 import type { WireResult } from "./adapters/types.js";
 import { runSelfCheck, awkAvailable } from "./selfcheck.js";
@@ -26,8 +26,23 @@ function printValidation(v: ValidationResult): void {
     process.stdout.write(`  ${pc.yellow("warning:")} ${w}\n`);
 }
 
+/**
+ * Load the effective policy, or die trying with a one-line diagnosis: a
+ * corrupt user policy file is a typo, and a typo is not a stack trace. Every
+ * command that reads the policy goes through here, so `status`, `init`,
+ * `check`, `rules`, `validate`, `discover` and `probe` all refuse cleanly.
+ */
+function loadPolicyOrExit(): EffectivePolicy {
+  try {
+    return loadEffectivePolicy();
+  } catch (e) {
+    process.stdout.write(pc.red(`herkos: ${(e as Error).message}\n`));
+    process.exit(1);
+  }
+}
+
 function initCmd(opts: { dryRun?: boolean }): void {
-  const eff = loadEffectivePolicy();
+  const eff = loadPolicyOrExit();
   const v = validatePolicy(eff);
   if (v.errors.length) {
     printValidation(v);
@@ -82,7 +97,7 @@ function initCmd(opts: { dryRun?: boolean }): void {
 }
 
 function statusCmd(): void {
-  const eff = loadEffectivePolicy();
+  const eff = loadPolicyOrExit();
   const compiled = compile(eff);
   process.stdout.write(
     `policy: ${eff.rules.length} rules (${eff.userPolicyLoaded ? "baseline + user" : "baseline only"}); user policy ${eff.userPolicyLoaded ? "at" : "would be at"} ${userPolicyPath()}\n`,
@@ -217,7 +232,7 @@ function printCorpus(results: CorpusResult[]): void {
 }
 
 function checkCmd(): void {
-  const effective = loadEffectivePolicy();
+  const effective = loadPolicyOrExit();
   const compiled = compile(effective);
   const v = validatePolicy(effective);
   printValidation(v);
@@ -265,7 +280,7 @@ function checkCmd(): void {
 }
 
 function rulesCmd(): void {
-  const eff = loadEffectivePolicy();
+  const eff = loadPolicyOrExit();
   printValidation(validatePolicy(eff));
   for (const r of eff.rules) {
     const src = BASELINE.some((b) => b.id === r.id)
@@ -295,7 +310,7 @@ function rulesCmd(): void {
 }
 
 function validateCmd(): void {
-  const eff = loadEffectivePolicy();
+  const eff = loadPolicyOrExit();
   const v = validatePolicy(eff);
   printValidation(v);
   if (v.errors.length) {
@@ -329,6 +344,7 @@ async function probeCmd(opts: {
   budgetUsd?: string;
   timeout?: string;
 }): Promise<void> {
+  loadPolicyOrExit(); // a corrupt policy is refused before anything runs
   // The ceilings are parsed and refused FIRST: a NaN budget or timeout must
   // exit before any harness is even detected, let alone run.
   let budgetUsd: number;
@@ -476,4 +492,9 @@ program
   .option("--add <ids>", "add the named candidate rule ids without prompting")
   .option("--list", "only list; never prompt")
   .action(discoverCommand);
-program.parse();
+// Under the test runner this module is imported, not executed as a program:
+// vitest sets VITEST, and parsing the runner's own argv would exit the worker.
+if (process.env.VITEST === undefined) program.parse();
+
+/** The command bodies, for tests that exercise them without argv. */
+export const __test = { initCmd, statusCmd, checkCmd, rulesCmd, validateCmd };
