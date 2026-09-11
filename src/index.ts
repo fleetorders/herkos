@@ -54,6 +54,12 @@ export {
 } from "./adapters/claude-code.js";
 export { runSelfCheck, syntaxCheck, awkAvailable, CASES } from "./selfcheck.js";
 export { EXTRACT_AWK } from "./extract.js";
+export {
+  CANDIDATES,
+  discoverCandidates,
+  addCandidatesToUserPolicy,
+} from "./discover.js";
+export type { Candidate, Discovery, AddResult } from "./discover.js";
 export type { CheckResult, CheckCase } from "./selfcheck.js";
 export { readBlockLog, summariseBlocks } from "./blocklog.js";
 export type { BlockEntry, BlockSummary } from "./blocklog.js";

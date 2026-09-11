@@ -28,6 +28,9 @@ than left to rot. What exists today is described in the README, not here.
 - An enforcement path that depends on nothing — **done**: the hook reads its
   payload with a POSIX awk extractor; no jq, and an unreadable payload is
   announced instead of passing in silence.
+- Install-time discovery — **done**: `herkos discover` names credential-shaped
+  files present on this machine but not on the list (paths only), one keypress
+  to add.
 - Adapters for more harnesses (the policy is harness-agnostic; each is a new
   adapter behind the shared interface).
 - A guided `herkos init` that reports, per harness, exactly what it can and

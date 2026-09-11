@@ -22,6 +22,7 @@ npx herkos init      # detect installed harnesses, wire the policy into each
 npx herkos check     # prove the never-list is enforced
 npx herkos validate  # check the policy file for errors before wiring
 npx herkos status    # what's protected, and with which rules
+npx herkos discover  # credential files on this machine not yet on the list
 ```
 
 ## What it blocks (the default-on baseline)
@@ -155,6 +156,17 @@ evaluator before anything is wired:
   "notMatch": ["git push origin main", "git push --force-with-lease"]
 }
 ```
+
+## Finding what to add
+
+A baseline of generic conventions cannot know that _your_ machine has a
+`~/.pgpass` or a `~/.config/gh/hosts.yml`. `herkos discover` looks for
+credential-shaped files that exist here and are not yet on your never-list, and
+offers to add each — one keypress per candidate on a terminal, or
+`herkos discover --add <ids>` in a script. It reports **paths only and never
+reads a file's contents**: reading a credential file to decide whether to
+protect it would be the exposure it exists to prevent. What it finds goes into
+your own policy, never the shipped baseline.
 
 ## What it is NOT
 

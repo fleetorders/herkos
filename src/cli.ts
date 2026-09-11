@@ -14,6 +14,7 @@ import { runSelfCheck, awkAvailable } from "./selfcheck.js";
 import { readBlockLog, summariseBlocks } from "./blocklog.js";
 import { runBypassCorpus } from "./corpus.js";
 import type { CorpusResult, HarnessView } from "./corpus.js";
+import { discoverCandidates, addCandidatesToUserPolicy } from "./discover.js";
 
 function printValidation(v: ValidationResult): void {
   for (const e of v.errors)
@@ -287,6 +288,106 @@ function uninstallCmd(): void {
   }
 }
 
+/**
+ * Discover credential-shaped files present on this machine but not on the
+ * never-list, and offer to add each. Paths only — a credential file's contents
+ * are never read. Interactive by default (one keypress per candidate); `--add`
+ * adds named ids without a prompt, and `--list` only names them.
+ */
+async function discoverCmd(opts: {
+  add?: string;
+  list?: boolean;
+}): Promise<void> {
+  const effective = loadEffectivePolicy();
+  const found = discoverCandidates(effective);
+
+  if (opts.add) {
+    const ids = opts.add
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const r = addCandidatesToUserPolicy(ids, effective);
+    if (r.added.length)
+      process.stdout.write(
+        pc.green(`added ${r.added.length} rule(s): ${r.added.join(", ")}\n`),
+      );
+    if (r.skipped.length)
+      process.stdout.write(
+        pc.yellow(
+          `skipped (already present, covered, or not found here): ${r.skipped.join(", ")}\n`,
+        ),
+      );
+    if (r.added.length)
+      process.stdout.write(
+        `Run ${pc.bold("herkos init")} to compile the new rule(s) into your harnesses.\n`,
+      );
+    return;
+  }
+
+  if (found.length === 0) {
+    process.stdout.write(
+      "herkos discover — no uncovered credential-shaped files found on this machine.\n",
+    );
+    return;
+  }
+
+  process.stdout.write(
+    `herkos discover — ${found.length} credential-shaped file(s) present here and NOT on your never-list.\nPaths only; herkos never reads their contents.\n\n`,
+  );
+  for (const d of found) {
+    process.stdout.write(
+      `  ${pc.bold(d.candidate.rule.id)} — ${d.candidate.what}\n    ${pc.dim(d.foundAt)}\n`,
+    );
+  }
+  process.stdout.write("\n");
+
+  // A keypress prompt only makes sense on a terminal. Unattended (a script, CI,
+  // an agent), name the one command that adds them — never block on input.
+  if (!process.stdin.isTTY) {
+    const ids = found.map((d) => d.candidate.rule.id).join(",");
+    process.stdout.write(
+      `Not a terminal — to add these, run:\n  ${pc.bold(`herkos discover --add ${ids}`)}\nor a comma-separated subset of those ids.\n`,
+    );
+    return;
+  }
+
+  const readline = await import("node:readline/promises");
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  const chosen: string[] = [];
+  try {
+    for (const d of found) {
+      const ans = (
+        await rl.question(`Add ${pc.bold(d.candidate.rule.id)}? [y/N/a=all/q] `)
+      )
+        .trim()
+        .toLowerCase();
+      if (ans === "q") break;
+      if (ans === "a") {
+        chosen.push(...found.map((x) => x.candidate.rule.id));
+        break;
+      }
+      if (ans === "y") chosen.push(d.candidate.rule.id);
+    }
+  } finally {
+    rl.close();
+  }
+  const unique = [...new Set(chosen)];
+  if (unique.length === 0) {
+    process.stdout.write("Nothing added.\n");
+    return;
+  }
+  const r = addCandidatesToUserPolicy(unique, effective);
+  process.stdout.write(
+    pc.green(`\nAdded ${r.added.length} rule(s): ${r.added.join(", ")}\n`),
+  );
+  process.stdout.write(
+    `Run ${pc.bold("herkos init")} to compile them into your harnesses.\n`,
+  );
+}
+
 const program = new Command();
 program
   .name("herkos")
@@ -320,4 +421,12 @@ program
   .command("uninstall")
   .description("remove herkos wiring from installed harnesses")
   .action(uninstallCmd);
+program
+  .command("discover")
+  .description(
+    "find credential files on this machine that are not on the never-list (paths only)",
+  )
+  .option("--add <ids>", "add the named candidate rule ids without prompting")
+  .option("--list", "only list; never prompt")
+  .action(discoverCmd);
 program.parse();
