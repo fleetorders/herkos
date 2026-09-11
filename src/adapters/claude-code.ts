@@ -25,6 +25,8 @@ import type {
   VerifyResult,
   RuleCoverage,
   LayerKind,
+  ProbeContext,
+  ProbeCommand,
 } from "./types.js";
 
 const HOOK_MARK = "herkos-hook";
@@ -819,6 +821,29 @@ export const claudeCodeAdapter: HarnessAdapter = {
     return {
       changed,
       detail: changed.length ? "herkos wiring removed" : "nothing to remove",
+    };
+  },
+
+  liveProbeCommand(ctx: ProbeContext): ProbeCommand {
+    // One non-interactive turn against the real installed hook. JSON output so
+    // the report can read the model's own usage/cost; a USD budget is the hard
+    // spend ceiling, and --dangerously-skip-permissions makes the run headless
+    // WITHOUT relaxing herkos — the hook fires in that mode exactly as in any
+    // other (that is the point of the hook). The child keeps the real config
+    // and auth; only the working directory is the throwaway.
+    return {
+      bin: process.env.HERKOS_CLAUDE_BIN ?? "claude",
+      args: [
+        "-p",
+        ctx.prompt,
+        "--output-format",
+        "json",
+        "--max-budget-usd",
+        ctx.budgetUsd.toFixed(2),
+        "--dangerously-skip-permissions",
+      ],
+      env: { ...process.env },
+      ceilingNote: `--max-budget-usd ${ctx.budgetUsd.toFixed(2)} plus a wall-clock timeout`,
     };
   },
 

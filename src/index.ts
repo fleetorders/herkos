@@ -60,6 +60,16 @@ export {
   addCandidatesToUserPolicy,
 } from "./discover.js";
 export type { Candidate, Discovery, AddResult } from "./discover.js";
+export { runLiveProbe, judgeRun, PROBE_CASES } from "./probe.js";
+export type {
+  ProbeCase,
+  ProbeOutcome,
+  ProbeReport,
+  ProbeVerdict,
+  ProbeRunner,
+  ProbeRun,
+  ProbeOptions,
+} from "./probe.js";
 export type { CheckResult, CheckCase } from "./selfcheck.js";
 export { readBlockLog, summariseBlocks } from "./blocklog.js";
 export type { BlockEntry, BlockSummary } from "./blocklog.js";

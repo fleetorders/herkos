@@ -80,4 +80,32 @@ export interface HarnessAdapter {
    * strength. Reads installed state; never writes.
    */
   coverage?(policy: CompiledPolicy): RuleCoverage[];
+  /**
+   * How to run ONE headless probe session against the REAL installed wiring —
+   * the harness binary, its flags for a single non-interactive turn, a hard
+   * spend ceiling, and the working directory the decoy sits in. The probe
+   * orchestrator (probe.ts) plants the decoy and judges the transcript; this
+   * only says how to invoke the harness. `null` when the harness has no headless
+   * mode. Never mutates config — it exercises what `wire` already installed.
+   */
+  liveProbeCommand?(ctx: ProbeContext): ProbeCommand | null;
+}
+
+/** What the probe orchestrator hands an adapter to build its headless command. */
+export interface ProbeContext {
+  /** The throwaway working directory the decoy file sits in. */
+  workingDir: string;
+  /** The instruction for the agent (read the decoy, or run the fetched-exec line). */
+  prompt: string;
+  /** Hard spend ceiling for this run, in USD, where the harness supports one. */
+  budgetUsd: number;
+}
+
+/** A single headless invocation: the binary, its argv, and the child's env. */
+export interface ProbeCommand {
+  bin: string;
+  args: string[];
+  env: NodeJS.ProcessEnv;
+  /** One line on how the ceiling is enforced for this harness, for the report. */
+  ceilingNote: string;
 }

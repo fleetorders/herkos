@@ -27,6 +27,8 @@ import type {
   VerifyResult,
   RuleCoverage,
   LayerKind,
+  ProbeContext,
+  ProbeCommand,
 } from "./types.js";
 import {
   generateHook,
@@ -522,6 +524,26 @@ export const codexAdapter: HarnessAdapter = {
       ok: true,
       state: "ok",
       detail: `credential-deny profile present (OS-enforced)${prefixDetail}${hookWired ? "; hook wired for shell commands (needs '/hooks' trust in Codex to be active)" : "; hook NOT wired"}`,
+    };
+  },
+
+  liveProbeCommand(ctx: ProbeContext): ProbeCommand {
+    // codex exec is the single-turn headless mode. It runs in the decoy's
+    // directory against the real config and profile. Codex exec has no budget
+    // flag, so the wall-clock timeout is the whole ceiling here; the report
+    // says so. --skip-git-repo-check because the throwaway dir is not a repo.
+    return {
+      bin: codexBin(),
+      args: [
+        "exec",
+        "--skip-git-repo-check",
+        "--cd",
+        ctx.workingDir,
+        ctx.prompt,
+      ],
+      env: { ...process.env },
+      ceilingNote:
+        "codex exec has no budget flag — the wall-clock timeout is the ceiling",
     };
   },
 

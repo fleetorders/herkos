@@ -31,6 +31,9 @@ than left to rot. What exists today is described in the README, not here.
 - Install-time discovery — **done**: `herkos discover` names credential-shaped
   files present on this machine but not on the list (paths only), one keypress
   to add.
+- Live proof through the real harness — **done**: opt-in `herkos probe` runs a
+  bounded headless session per harness (confirmation + spend ceiling) and reads
+  the transcript for a real block or a leak.
 - Adapters for more harnesses (the policy is harness-agnostic; each is a new
   adapter behind the shared interface).
 - A guided `herkos init` that reports, per harness, exactly what it can and

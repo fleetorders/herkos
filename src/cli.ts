@@ -15,6 +15,8 @@ import { readBlockLog, summariseBlocks } from "./blocklog.js";
 import { runBypassCorpus } from "./corpus.js";
 import type { CorpusResult, HarnessView } from "./corpus.js";
 import { discoverCandidates, addCandidatesToUserPolicy } from "./discover.js";
+import { runLiveProbe } from "./probe.js";
+import type { ProbeVerdict } from "./probe.js";
 
 function printValidation(v: ValidationResult): void {
   for (const e of v.errors)
@@ -388,6 +390,98 @@ async function discoverCmd(opts: {
   );
 }
 
+const DEFAULT_BUDGET_USD = 0.5;
+const DEFAULT_TIMEOUT_S = 120;
+
+/**
+ * The live probe: opt-in, spends tokens, needs real auth. It never runs without
+ * an explicit confirmation — a `--yes` flag, or a typed "yes" on a terminal.
+ * Unattended without `--yes` it refuses and prints the exact command, so it can
+ * never spend the user's tokens by accident.
+ */
+async function probeCmd(opts: {
+  harness?: string;
+  yes?: boolean;
+  budgetUsd?: string;
+  timeout?: string;
+}): Promise<void> {
+  const installed = detectInstalled().filter((a) => a.liveProbeCommand);
+  const chosen = opts.harness
+    ? installed.filter((a) => a.id === opts.harness)
+    : installed;
+  if (chosen.length === 0) {
+    process.stdout.write(
+      opts.harness
+        ? `no installed harness with id '${opts.harness}' to probe\n`
+        : "no installed harness supports a live probe\n",
+    );
+    process.exit(1);
+  }
+  const budgetUsd = Math.max(
+    0.01,
+    Number(opts.budgetUsd ?? DEFAULT_BUDGET_USD),
+  );
+  const timeoutMs =
+    Math.max(10, Number(opts.timeout ?? DEFAULT_TIMEOUT_S)) * 1000;
+  const names = chosen.map((a) => a.name).join(", ");
+
+  process.stdout.write(
+    `herkos probe runs ONE real, headless agent session per harness (${names}) against your\n` +
+      `installed wiring, to prove a block actually fires. It spends tokens and uses your real\n` +
+      `auth. Ceiling per run: $${budgetUsd.toFixed(2)} where the harness supports a budget, and a\n` +
+      `${timeoutMs / 1000}s timeout always. It reads only decoy files it plants, never a real secret.\n\n`,
+  );
+
+  if (!opts.yes) {
+    if (!process.stdin.isTTY) {
+      process.stdout.write(
+        pc.yellow(
+          "Refusing to spend tokens without confirmation. Re-run with --yes to proceed.\n",
+        ),
+      );
+      process.exit(1);
+    }
+    const readline = await import("node:readline/promises");
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+    const ans = (await rl.question('Type "yes" to run the live probe: '))
+      .trim()
+      .toLowerCase();
+    rl.close();
+    if (ans !== "yes") {
+      process.stdout.write("Cancelled — nothing was run.\n");
+      return;
+    }
+  }
+
+  const reports = runLiveProbe(chosen, { budgetUsd, timeoutMs });
+  const mark: Record<ProbeVerdict, string> = {
+    blocked: pc.green("BLOCKED"),
+    leaked: pc.red("LEAKED"),
+    inconclusive: pc.yellow("inconclusive"),
+    unavailable: pc.dim("unavailable"),
+  };
+  let leaked = false;
+  for (const r of reports) {
+    process.stdout.write(`\n${pc.bold(r.harness)} — ${r.note}\n`);
+    if (!r.ran) continue;
+    for (const o of r.outcomes) {
+      if (o.verdict === "leaked") leaked = true;
+      process.stdout.write(`  ${mark[o.verdict]} ${o.case} — ${o.detail}\n`);
+    }
+  }
+  process.stdout.write(
+    leaked
+      ? pc.red(
+          "\nA probe LEAKED — the installed wiring did not block a never-list action.\n",
+        )
+      : pc.green("\nNo leak: every probe was blocked or declined.\n"),
+  );
+  process.exit(leaked ? 1 : 0);
+}
+
 const program = new Command();
 program
   .name("herkos")
@@ -421,6 +515,25 @@ program
   .command("uninstall")
   .description("remove herkos wiring from installed harnesses")
   .action(uninstallCmd);
+program
+  .command("probe")
+  .description(
+    "opt-in: run a real headless session to prove a block fires (spends tokens)",
+  )
+  .option("--harness <id>", "probe only this harness (claude-code | codex)")
+  .option(
+    "--yes",
+    "skip the confirmation prompt (required when not a terminal)",
+  )
+  .option(
+    "--budget-usd <n>",
+    `spend ceiling per run (default ${DEFAULT_BUDGET_USD})`,
+  )
+  .option(
+    "--timeout <seconds>",
+    `per-run timeout (default ${DEFAULT_TIMEOUT_S})`,
+  )
+  .action(probeCmd);
 program
   .command("discover")
   .description(

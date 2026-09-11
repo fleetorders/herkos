@@ -168,6 +168,22 @@ reads a file's contents**: reading a credential file to decide whether to
 protect it would be the exposure it exists to prevent. What it finds goes into
 your own policy, never the shipped baseline.
 
+## Proof through the real harness (opt-in)
+
+The self-check and the corpus prove the hook herkos generates; they cannot prove
+the harness still calls it after an upgrade. `herkos probe` does — it runs one
+real, headless session per harness against your installed wiring and reads the
+transcript to confirm a block fires. It is **opt-in and bounded**: it never runs
+without a typed confirmation (or `--yes`), every run has a spend ceiling
+(`--budget-usd`, default \$0.50, plus a `--timeout`), and it reads only decoy
+files it plants in a throwaway directory — never a real secret. A `LEAKED`
+verdict, the decoy's contents coming back in the output, fails the command.
+
+```sh
+herkos probe                 # confirm, then probe every installed harness
+herkos probe --harness codex --yes --budget-usd 0.25
+```
+
 ## What it is NOT
 
 - **Not a sandbox.** OS-level containment is the platforms' job and they do it
