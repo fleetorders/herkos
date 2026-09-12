@@ -523,7 +523,7 @@ async function probeCmd(opts: {
   process.exit(leaked ? 1 : 0);
 }
 
-const program = new Command();
+export const program = new Command();
 program
   .name("herkos")
   .description(
@@ -603,9 +603,6 @@ project
   .command("uninstall [dir]")
   .description("remove the herkos project wiring from the repo")
   .action(projectUninstallCmd);
-// Under the test runner this module is imported, not executed as a program:
-// vitest sets VITEST, and parsing the runner's own argv would exit the worker.
-if (process.env.VITEST === undefined) program.parse();
 
 /** The command bodies, for tests that exercise them without argv. */
 export const __test = { initCmd, statusCmd, checkCmd, rulesCmd, validateCmd };
