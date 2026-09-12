@@ -1,6 +1,6 @@
 {
   "name": "herkos",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Your never-list, enforced everywhere: block agents from reading credentials or running fetched code — one policy, compiled into every agent harness on your machine, in every mode.",
   "type": "module",
   "bin": {
