@@ -1,5 +1,13 @@
+import path from "node:path";
 import { Command } from "commander";
 import pc from "picocolors";
+import {
+  validateRepoPolicy,
+  compileProjectPolicy,
+  wireProject,
+  verifyProject,
+  unwireProject,
+} from "./project.js";
 import {
   loadEffectivePolicy,
   validatePolicy,
@@ -322,6 +330,63 @@ function validateCmd(): void {
   );
 }
 
+function projectInitCmd(dir?: string): void {
+  const repoRoot = path.resolve(dir ?? ".");
+  const { effective, validation } = validateRepoPolicy(repoRoot);
+  if (!effective.userPolicyLoaded) {
+    process.stdout.write(
+      `no herkos.json at ${repoRoot} — create one (a repo's own never-list) and re-run. See 'herkos project' help.\n`,
+    );
+    process.exit(1);
+  }
+  printValidation(validation);
+  if (validation.errors.length) {
+    process.stdout.write(
+      pc.red(
+        `herkos.json has ${validation.errors.length} error(s); nothing was written\n`,
+      ),
+    );
+    process.exit(1);
+  }
+  if (effective.rules.length === 0) {
+    process.stdout.write(
+      `herkos.json declares no rules — nothing to compile.\n`,
+    );
+    process.exit(1);
+  }
+  const { compiled } = compileProjectPolicy(repoRoot);
+  const r = wireProject(repoRoot, compiled);
+  process.stdout.write(`${pc.green("wired project")}: ${r.detail}\n`);
+  process.stdout.write(
+    pc.dim(
+      "Claude Code only — Codex config has no repo-local layer, so a repo's Codex sessions rest on the machine policy, not this list.\n",
+    ),
+  );
+  process.stdout.write(
+    `Commit ${pc.bold(".claude/")} and ${pc.bold("herkos.json")}, and add ${pc.bold("herkos project check")} to CI to catch drift.\n`,
+  );
+}
+
+function projectCheckCmd(dir?: string): void {
+  const repoRoot = path.resolve(dir ?? ".");
+  const v = verifyProject(repoRoot);
+  const mark = v.ok
+    ? pc.green("ok  ")
+    : v.state === "no-policy"
+      ? pc.dim("n/a ")
+      : pc.red("FAIL");
+  process.stdout.write(`  ${mark} ${v.detail}\n`);
+  // no-policy is not a failure (a repo may simply not use a project list); a
+  // present-but-drifted or unwired policy is, so CI catches it.
+  process.exit(v.ok || v.state === "no-policy" ? 0 : 1);
+}
+
+function projectUninstallCmd(dir?: string): void {
+  const repoRoot = path.resolve(dir ?? ".");
+  const r = unwireProject(repoRoot);
+  process.stdout.write(`  ${r.detail}\n`);
+}
+
 function uninstallCmd(): void {
   for (const a of detectInstalled()) {
     const r = a.unwire();
@@ -492,6 +557,26 @@ program
   .option("--add <ids>", "add the named candidate rule ids without prompting")
   .option("--list", "only list; never prompt")
   .action(discoverCommand);
+
+const project = program
+  .command("project")
+  .description(
+    "per-repo policy: compile a repo's herkos.json into its Claude Code project layer",
+  );
+project
+  .command("init [dir]")
+  .description("compile <dir>/herkos.json into the repo's .claude project hook")
+  .action(projectInitCmd);
+project
+  .command("check [dir]")
+  .description(
+    "verify the committed project hook matches herkos.json (for CI); exit 1 on drift",
+  )
+  .action(projectCheckCmd);
+project
+  .command("uninstall [dir]")
+  .description("remove the herkos project wiring from the repo")
+  .action(projectUninstallCmd);
 // Under the test runner this module is imported, not executed as a program:
 // vitest sets VITEST, and parsing the runner's own argv would exit the worker.
 if (process.env.VITEST === undefined) program.parse();

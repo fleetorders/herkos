@@ -7,6 +7,10 @@ export {
   compile,
   denyReadTargets,
   policyFingerprint,
+  loadProjectPolicy,
+  validateProjectPolicy,
+  projectPolicyPath,
+  PROJECT_POLICY_FILE,
   userPolicyPath,
   herkosConfigDir,
   blockLogFile,
@@ -22,6 +26,7 @@ export type {
   CompiledPolicy,
   CompiledRule,
   ValidationResult,
+  ProjectPolicy,
 } from "./policy.js";
 export { ADAPTERS, detectInstalled } from "./adapters/index.js";
 export type {
@@ -75,3 +80,13 @@ export type {
 export type { CheckResult, CheckCase } from "./selfcheck.js";
 export { readBlockLog, summariseBlocks } from "./blocklog.js";
 export type { BlockEntry, BlockSummary } from "./blocklog.js";
+export {
+  wireProject,
+  unwireProject,
+  verifyProject,
+  compileProjectPolicy,
+  validateRepoPolicy,
+  projectHookPath,
+  projectSettingsPath,
+} from "./project.js";
+export type { ProjectWireResult, ProjectVerifyResult } from "./project.js";

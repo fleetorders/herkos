@@ -1,0 +1,243 @@
+/**
+ * Project-scoped never-list: a repo commits `herkos.json`, and herkos compiles
+ * it into that repo's Claude Code project layer — a self-contained hook checked
+ * into the repo and registered in the repo's `.claude/settings.json`.
+ *
+ * Three properties make this safe and portable:
+ *
+ * - COMPOSITION, not a merged policy. The project hook is a SEPARATE PreToolUse
+ *   hook alongside the machine hook (in the user settings). Claude Code runs
+ *   hooks from every settings level and any exit-2 blocks, so the project hook
+ *   can only ADD refusals — it structurally cannot weaken the machine's floor.
+ *   That is why `herkos.json` has no `disable`.
+ *
+ * - PORTABLE + STRANGER-SAFE. The committed hook is the same dependency-free
+ *   shell herkos generates elsewhere (`sh`/`awk`/`grep`), referenced through
+ *   `$CLAUDE_PROJECT_DIR` so it resolves in any clone, and it carries no machine
+ *   path — the policy file it names is the repo-relative `herkos.json`. A
+ *   stranger who clones the repo is guarded once they trust the project hook,
+ *   even without herkos installed.
+ *
+ * - DRIFT-CHECKED. The committed hook carries the policy stamp, so `herkos
+ *   project check` (in CI) fails when the committed hook no longer matches
+ *   `herkos.json` — the same drift the machine install already detects.
+ *
+ * Claude Code only: Codex resolves config from `~/.codex` (global) plus `-c`
+ * overrides and `-p` profiles, with no repo-local layer, so there is no honest
+ * per-repo Codex target. A repo's Codex sessions are still covered by the
+ * machine policy; they just do not get the repo's own committed list.
+ */
+import fs from "node:fs";
+import path from "node:path";
+import {
+  compile,
+  loadProjectPolicy,
+  validateProjectPolicy,
+  type CompiledPolicy,
+  type EffectivePolicy,
+  type ValidationResult,
+} from "./policy.js";
+import {
+  generateHook,
+  readInstalledStamp,
+  stampOf,
+} from "./adapters/claude-code.js";
+
+/** The repo-relative path Claude Code resolves for the committed hook. */
+const HOOK_REL = ".claude/hooks/herkos-project.sh";
+const HOOK_COMMAND = `sh "$CLAUDE_PROJECT_DIR/${HOOK_REL}"`;
+
+export function projectHookPath(repoRoot: string): string {
+  return path.join(repoRoot, HOOK_REL);
+}
+
+export function projectSettingsPath(repoRoot: string): string {
+  return path.join(repoRoot, ".claude", "settings.json");
+}
+
+/**
+ * Compile a repo's `herkos.json` with a repo-relative policy path, so the hook
+ * baked from it names `herkos.json` rather than an absolute machine path — the
+ * committed artifact must carry nothing machine-specific.
+ */
+export function compileProjectPolicy(repoRoot: string): {
+  effective: EffectivePolicy;
+  compiled: CompiledPolicy;
+} {
+  const effective = loadProjectPolicy(repoRoot);
+  const compiled = {
+    ...compile(effective),
+    userPolicyPath: "herkos.json",
+  };
+  return { effective, compiled };
+}
+
+interface SettingsHookEntry {
+  matcher?: string;
+  hooks?: { type?: string; command?: string }[];
+}
+
+/** Is this settings entry the herkos project hook? */
+function isOursProject(entry: SettingsHookEntry): boolean {
+  return (entry.hooks ?? []).some((h) => (h.command ?? "").includes(HOOK_REL));
+}
+
+export interface ProjectWireResult {
+  changed: string[];
+  ruleCount: number;
+  detail: string;
+}
+
+/**
+ * Compile the repo's `herkos.json` into its Claude Code project layer: write
+ * the self-contained hook and register it on PreToolUse in the repo's
+ * `.claude/settings.json`. Idempotent (the herkos entry is replaced, never
+ * duplicated) and backs the settings file up once before the first edit.
+ */
+export function wireProject(
+  repoRoot: string,
+  compiled: CompiledPolicy,
+): ProjectWireResult {
+  const changed: string[] = [];
+
+  // 1. The committed, self-contained hook.
+  const hookFile = projectHookPath(repoRoot);
+  fs.mkdirSync(path.dirname(hookFile), { recursive: true });
+  fs.writeFileSync(hookFile, generateHook(compiled), { mode: 0o755 });
+  changed.push(hookFile);
+
+  // 2. Register it on PreToolUse in the repo's project settings.
+  const sp = projectSettingsPath(repoRoot);
+  let settings: Record<string, unknown> = {};
+  if (fs.existsSync(sp)) {
+    settings = JSON.parse(fs.readFileSync(sp, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    const bak = `${sp}.herkos-bak`;
+    if (!fs.existsSync(bak)) {
+      fs.copyFileSync(sp, bak);
+      changed.push(bak);
+    }
+  }
+  const rawHooks = settings["hooks"];
+  const hooks = (
+    typeof rawHooks === "object" && rawHooks !== null ? rawHooks : {}
+  ) as Record<string, SettingsHookEntry[]>;
+  const rawPre = hooks["PreToolUse"];
+  const pre = (Array.isArray(rawPre) ? rawPre : []).filter(
+    (e) => !isOursProject(e),
+  );
+  pre.push({
+    matcher: "*",
+    hooks: [{ type: "command", command: HOOK_COMMAND }],
+  });
+  hooks["PreToolUse"] = pre;
+  settings["hooks"] = hooks;
+  fs.mkdirSync(path.dirname(sp), { recursive: true });
+  fs.writeFileSync(sp, JSON.stringify(settings, null, 2) + "\n");
+  changed.push(sp);
+
+  return {
+    changed,
+    ruleCount: compiled.ruleCount,
+    detail: `project hook generated (${compiled.ruleCount} rule(s), stamp ${stampOf(compiled)}) and registered on PreToolUse in ${path.relative(repoRoot, sp) || sp}. Commit .claude/ so every clone is guarded; it composes on top of each contributor's machine policy and can only add blocks.`,
+  };
+}
+
+/** Remove exactly what wireProject added: the hook entry, the hook file, and an emptied hooks container. */
+export function unwireProject(repoRoot: string): ProjectWireResult {
+  const changed: string[] = [];
+  const sp = projectSettingsPath(repoRoot);
+  if (fs.existsSync(sp)) {
+    const settings = JSON.parse(fs.readFileSync(sp, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    const rawHooks = settings["hooks"];
+    const hooks = (
+      typeof rawHooks === "object" && rawHooks !== null ? rawHooks : {}
+    ) as Record<string, SettingsHookEntry[]>;
+    const pre = hooks["PreToolUse"];
+    if (Array.isArray(pre)) {
+      const kept = pre.filter((e) => !isOursProject(e));
+      if (kept.length !== pre.length) {
+        if (kept.length === 0) delete hooks["PreToolUse"];
+        else hooks["PreToolUse"] = kept;
+        if (Object.keys(hooks).length === 0) delete settings["hooks"];
+        else settings["hooks"] = hooks;
+        fs.writeFileSync(sp, JSON.stringify(settings, null, 2) + "\n");
+        changed.push(sp);
+      }
+    }
+  }
+  const hookFile = projectHookPath(repoRoot);
+  if (fs.existsSync(hookFile)) {
+    fs.rmSync(hookFile);
+    changed.push(hookFile);
+  }
+  return {
+    changed,
+    ruleCount: 0,
+    detail: changed.length ? "project wiring removed" : "nothing to remove",
+  };
+}
+
+export interface ProjectVerifyResult {
+  ok: boolean;
+  state: "ok" | "stale" | "unwired" | "no-policy";
+  detail: string;
+}
+
+/**
+ * Verify a repo's committed project wiring against its `herkos.json` — the CI
+ * drift check. `unwired` when there is a policy but no registered hook;
+ * `stale` when the committed hook's stamp does not match the policy (someone
+ * edited `herkos.json` without re-running `project init`); `ok` when they agree.
+ */
+export function verifyProject(repoRoot: string): ProjectVerifyResult {
+  const { effective, compiled } = compileProjectPolicy(repoRoot);
+  if (!effective.userPolicyLoaded) {
+    return {
+      ok: false,
+      state: "no-policy",
+      detail: `no ${path.join(path.relative(process.cwd(), repoRoot) || ".", "herkos.json")} — nothing to check`,
+    };
+  }
+  const hookFile = projectHookPath(repoRoot);
+  const sp = projectSettingsPath(repoRoot);
+  const registered =
+    fs.existsSync(sp) &&
+    fs.readFileSync(sp, "utf8").includes(HOOK_REL) &&
+    fs.existsSync(hookFile);
+  if (!registered) {
+    return {
+      ok: false,
+      state: "unwired",
+      detail: `herkos.json present but no committed project hook — run 'herkos project init'`,
+    };
+  }
+  const installed = readInstalledStamp(hookFile);
+  const want = stampOf(compiled);
+  if (installed !== want) {
+    return {
+      ok: false,
+      state: "stale",
+      detail: `the committed project hook carries '${installed}' but herkos.json compiles to '${want}' — run 'herkos project init' and commit the result`,
+    };
+  }
+  return {
+    ok: true,
+    state: "ok",
+    detail: `project hook matches herkos.json (${compiled.ruleCount} rule(s), stamp ${want})`,
+  };
+}
+
+/** Validate a repo's project policy (thin re-export path for the CLI). */
+export function validateRepoPolicy(repoRoot: string): {
+  effective: EffectivePolicy;
+  validation: ValidationResult;
+} {
+  const effective = loadProjectPolicy(repoRoot);
+  return { effective, validation: validateProjectPolicy(effective) };
+}
