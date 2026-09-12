@@ -5,6 +5,12 @@ than left to rot. What exists today is described in the README, not here.
 
 ## Now
 
+- Per-repo policy committed with the repository — **done** (Claude Code):
+  `herkos project` compiles a repo's `herkos.json` into a self-contained,
+  committed project hook that composes on top of the machine floor (can only
+  add, never weaken), with a CI drift check. Codex has no repo-local layer, so
+  it is machine-scoped only — stated, not faked. Native project deny-rule
+  layering is a later add.
 - Per-session proof that enforcement is on — **done**: a session-start line
   reports enforced / not wired / drifted, and every generated hook carries a
   version + policy fingerprint stamp.

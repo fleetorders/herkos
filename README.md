@@ -239,6 +239,60 @@ of forcing it into one of the two built-in classes.
 `herkos status` marks an open rule as an advisory notice, never among the layers
 that actually block.
 
+## A never-list a repo commits (`herkos project`)
+
+The machine policy protects every session on your machine. A **project policy**
+lets a repository carry its own never-list for every contributor — "never read
+`secrets/prod`", "never run the reset script". Commit a `herkos.json` at the repo
+root and run `herkos project init`:
+
+```sh
+herkos project init      # compile ./herkos.json into the repo's .claude project hook
+herkos project check     # CI: fail if the committed hook drifted from herkos.json
+```
+
+It compiles the repo's rules into a **self-contained hook checked into the repo**
+(`.claude/hooks/herkos-project.sh`, registered on `PreToolUse` in
+`.claude/settings.json` via `$CLAUDE_PROJECT_DIR`). Commit `.claude/` and every
+clone is guarded — **even a contributor who has never installed herkos**, because
+the hook needs only `sh`, `awk` and `grep`.
+
+Two properties keep it safe:
+
+- **It composes; it can only add.** The project hook runs _alongside_ each
+  contributor's machine hook — Claude Code runs hooks from every settings level
+  and any refusal blocks — so a repo's policy can only _add_ to the machine's
+  never-list, never weaken it. That's why `herkos.json` has no `disable`
+  (herkos rejects one). A checked-out repo can't turn your protection off.
+- **It carries nothing machine-specific.** The committed hook names the
+  repo-relative `herkos.json`, no home path — clean to commit to a public repo.
+  It carries the policy stamp, so `herkos project check` in CI fails when someone
+  edits `herkos.json` without re-running init.
+
+```json
+// herkos.json at the repo root
+{
+  "rules": [
+    {
+      "id": "no-prod-secrets",
+      "class": "credential-read",
+      "description": "the repo's production secrets",
+      "paths": ["secrets/prod/"]
+    },
+    {
+      "id": "no-reset-script",
+      "class": "command-never",
+      "description": "the destructive reset script",
+      "commandPrefixes": [["./scripts/reset-db.sh"]]
+    }
+  ]
+}
+```
+
+**Claude Code only.** Codex resolves config from `~/.codex` with no repo-local
+layer, so a repo's Codex sessions rest on the machine policy, not the repo's own
+list — herkos says so rather than pretend a per-repo Codex guard exists.
+
 ## Policy file
 
 `~/.config/herkos/policy.json`:

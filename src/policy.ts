@@ -109,6 +109,16 @@ export interface UserPolicy {
   log?: boolean;
 }
 
+/**
+ * A repository's committed policy (`herkos.json`). It may only ADD rules — it
+ * has no `disable`, because a checked-out repo must never be able to weaken the
+ * baseline of the machine it lands on.
+ */
+export interface ProjectPolicy {
+  /** The repo's own never-list rules, same shape as baseline rules. */
+  rules?: Rule[];
+}
+
 export interface EffectivePolicy {
   rules: Rule[];
   disabled: string[];
@@ -118,6 +128,12 @@ export interface EffectivePolicy {
   log?: boolean;
   /** The `log` value exactly as the user wrote it — validated, never trusted. */
   rawLog?: unknown;
+  /**
+   * Present only for a project policy: the `disable` value a `herkos.json`
+   * carried, if any. A project may not disable baseline rules, so validation
+   * rejects it; kept here so the message can name what was wrong.
+   */
+  projectDisable?: unknown;
 }
 
 /**
@@ -302,6 +318,49 @@ export function loadEffectivePolicy(): EffectivePolicy {
     userPolicyLoaded: loaded,
     log: user.log !== false,
     rawLog: user.log,
+  };
+}
+
+/** The per-repository policy file, committed at the repo root. */
+export const PROJECT_POLICY_FILE = "herkos.json";
+
+export function projectPolicyPath(repoRoot: string): string {
+  return path.join(repoRoot, PROJECT_POLICY_FILE);
+}
+
+/**
+ * A repo's own never-list, read from `<repo>/herkos.json`. It carries ONLY the
+ * project's own rules — never the baseline, and never a `disable`. The baseline
+ * is the machine floor, enforced by the machine hook; the project hook composes
+ * ON TOP of it and can only ADD refusals. A checked-out repo must not be able to
+ * weaken the protection of the machine it is cloned onto, so a `disable` key is
+ * an error, not an option (see validateProjectPolicy).
+ *
+ * The returned EffectivePolicy's `rules` are the project rules alone, so the
+ * generated project hook bakes only those — the machine hook already carries
+ * the baseline.
+ */
+export function loadProjectPolicy(repoRoot: string): EffectivePolicy {
+  const p = projectPolicyPath(repoRoot);
+  let doc: ProjectPolicy = {};
+  let loaded = false;
+  if (fs.existsSync(p)) {
+    try {
+      doc = JSON.parse(fs.readFileSync(p, "utf8")) as ProjectPolicy;
+      loaded = true;
+    } catch (e) {
+      throw new Error(`project policy at ${p} is not valid JSON: ${String(e)}`);
+    }
+  }
+  return {
+    rules: [...(doc.rules ?? [])],
+    disabled: [],
+    userPolicyPath: p,
+    userPolicyLoaded: loaded,
+    log: false, // a committed project hook never writes a machine-local log
+    rawLog: undefined,
+    // Carried so validation can reject it with a clear message.
+    projectDisable: (doc as { disable?: unknown }).disable,
   };
 }
 
@@ -580,6 +639,24 @@ export function validatePolicy(policy: EffectivePolicy): ValidationResult {
     );
   }
   return { errors, warnings };
+}
+
+/**
+ * Validate a project policy: everything validatePolicy checks, plus the
+ * project-only rule that a `herkos.json` may not disable baseline rules — a
+ * checked-out repo must never weaken the machine's floor. A stray `disable`
+ * key is an error, not a silent ignore, so the maintainer learns why.
+ */
+export function validateProjectPolicy(
+  policy: EffectivePolicy,
+): ValidationResult {
+  const v = validatePolicy(policy);
+  if (policy.projectDisable !== undefined) {
+    v.errors.push(
+      `a project policy (${PROJECT_POLICY_FILE}) cannot disable baseline rules — remove the "disable" key; a repo may only ADD to the machine's never-list, never weaken it`,
+    );
+  }
+  return v;
 }
 
 /**
