@@ -17,11 +17,19 @@ export interface CheckCase {
   name: string;
   wantExit: number;
   payload: string;
+  /**
+   * The baseline rule this case exercises. Disabling a rule by id is a
+   * sanctioned action (D-003), so when that rule is off the case must PASS
+   * THROUGH (exit 0) — proving the disable held — rather than be reported as
+   * a broken guard.
+   */
+  rule?: string;
 }
 
 export const CASES: CheckCase[] = [
   {
     name: "blocks reading an SSH private key",
+    rule: "ssh-private-keys",
     wantExit: 2,
     payload: JSON.stringify({
       tool_name: "Read",
@@ -30,6 +38,7 @@ export const CASES: CheckCase[] = [
   },
   {
     name: "blocks cat of a .env file",
+    rule: "dotenv-files",
     wantExit: 2,
     payload: JSON.stringify({
       tool_name: "Bash",
@@ -38,6 +47,7 @@ export const CASES: CheckCase[] = [
   },
   {
     name: "blocks curl | sh",
+    rule: "curl-pipe-shell",
     wantExit: 2,
     payload: JSON.stringify({
       tool_name: "Bash",
@@ -46,10 +56,20 @@ export const CASES: CheckCase[] = [
   },
   {
     name: "blocks keychain dump",
+    rule: "macos-keychain",
     wantExit: 2,
     payload: JSON.stringify({
       tool_name: "Bash",
       tool_input: { command: "security find-generic-password -s x -w" },
+    }),
+  },
+  {
+    name: "blocks a tool-server tool reading an SSH key by path",
+    rule: "ssh-private-keys",
+    wantExit: 2,
+    payload: JSON.stringify({
+      tool_name: "mcp__filesystem__read_text_file",
+      tool_input: { path: "project/.ssh/id_ed25519" },
     }),
   },
   {
@@ -76,6 +96,15 @@ export const CASES: CheckCase[] = [
       tool_input: { file_path: "project/src/index.ts" },
     }),
   },
+  {
+    name: "passes the committed .env.example template",
+    rule: "dotenv-files",
+    wantExit: 0,
+    payload: JSON.stringify({
+      tool_name: "Read",
+      tool_input: { file_path: "project/.env.example" },
+    }),
+  },
 ];
 
 export interface CheckResult {
@@ -85,18 +114,61 @@ export interface CheckResult {
   gotExit: number;
 }
 
+/**
+ * Is awk installed? The hook reads its payload with awk, a POSIX utility every
+ * system and minimal image ships; its absence is the documented degradation.
+ */
+export function awkAvailable(): boolean {
+  return spawnSync("command", ["-v", "awk"], { shell: true }).status === 0;
+}
+
+/**
+ * Parse-check a generated hook with `sh -n`. A pattern baked in unquoted would
+ * turn the whole script into a syntax error that exits 2 on every call — this
+ * catches that class before the hook is trusted.
+ */
+export function syntaxCheck(script: string): { ok: boolean; detail: string } {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "herkos-syntax-"));
+  try {
+    const f = path.join(tmp, "hook.sh");
+    fs.writeFileSync(f, script);
+    const r = spawnSync("sh", ["-n", f], { encoding: "utf8", timeout: 10_000 });
+    const ok = r.status === 0;
+    return {
+      ok,
+      detail: ok
+        ? "clean"
+        : (r.stderr ?? "").trim() || `sh -n exited ${r.status ?? -1}`,
+    };
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 export function runSelfCheck(): {
   results: CheckResult[];
   ok: boolean;
-  jq: boolean;
+  awk: boolean;
 } {
-  const policy = compile(loadEffectivePolicy());
+  const effective = loadEffectivePolicy();
+  // The synthetic payloads must never land in the user's blocked-call log:
+  // a record of refusals is only evidence if every line is a real call.
+  const policy = { ...compile(effective), logFile: "" };
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "herkos-selfcheck-"));
   const script = path.join(tmp, "hook.sh");
   fs.writeFileSync(script, generateHook(policy), { mode: 0o755 });
-  const jq = spawnSync("command", ["-v", "jq"], { shell: true }).status === 0;
+  const awk = awkAvailable();
+  const disabled = new Set(effective.disabled);
 
-  const results: CheckResult[] = [];
+  const syn = syntaxCheck(script);
+  const results: CheckResult[] = [
+    {
+      name: "generated hook parses (sh -n)",
+      ok: syn.ok,
+      wantExit: 0,
+      gotExit: syn.ok ? 0 : 1,
+    },
+  ];
   for (const c of CASES) {
     const r = spawnSync("sh", [script], {
       input: c.payload,
@@ -104,13 +176,18 @@ export function runSelfCheck(): {
       timeout: 10_000,
     });
     const gotExit = r.status ?? -1;
+    // A case whose rule the user disabled by id must now pass through.
+    const off = c.rule !== undefined && disabled.has(c.rule);
+    const wantExit = off ? 0 : c.wantExit;
     results.push({
-      name: c.name,
-      ok: gotExit === c.wantExit,
-      wantExit: c.wantExit,
+      name: off
+        ? `${c.name} — rule '${c.rule}' disabled, passes through`
+        : c.name,
+      ok: gotExit === wantExit,
+      wantExit,
       gotExit,
     });
   }
   fs.rmSync(tmp, { recursive: true, force: true });
-  return { results, ok: results.every((r) => r.ok), jq };
+  return { results, ok: results.every((r) => r.ok), awk };
 }
