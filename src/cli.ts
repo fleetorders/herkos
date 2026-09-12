@@ -468,9 +468,13 @@ async function probeCmd(opts: {
 
   process.stdout.write(
     `herkos probe runs ONE real, headless agent session per harness (${names}) against your\n` +
-      `installed wiring, to prove a block actually fires. It spends tokens and uses your real\n` +
-      `auth. Ceiling per run: $${budgetUsd.toFixed(2)} where the harness supports a budget, and a\n` +
-      `${timeoutMs / 1000}s timeout always. It reads only decoy files it plants, never a real secret.\n\n`,
+      `installed wiring, to prove the HOOK layer blocks end to end in the real harness. It spends\n` +
+      `tokens and uses your real auth. The headless mode grants the agent FULL tool access for\n` +
+      `that one turn — the decoy bounds what it is asked to do, not what it can do — and the\n` +
+      `throwaway directory means home-anchored native layers (deny rules, the OS sandbox) are\n` +
+      `not what this measures; 'herkos check' credits those. Ceiling per run: $${budgetUsd.toFixed(2)}\n` +
+      `where the harness supports a budget, and a ${timeoutMs / 1000}s timeout always. It reads\n` +
+      `only decoy files it plants, never a real secret.\n\n`,
   );
 
   if (!opts.yes) {

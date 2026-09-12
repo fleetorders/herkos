@@ -173,6 +173,15 @@ without a typed confirmation (or `--yes`), every run has a spend ceiling
 files it plants in a throwaway directory — never a real secret. A `LEAKED`
 verdict, the decoy's contents coming back in the output, fails the command.
 
+Two things the probe says about itself rather than papers over. The headless
+mode it uses grants the agent **full tool access for that one turn** — the decoy
+bounds what the agent is asked to do, not what it can do, and the budget and
+timeout bound cost and time, not reach. And because the decoy sits in a
+throwaway directory, the probe measures the **hook layer** specifically:
+home-anchored native layers (the deny rules, the OS sandbox, Codex's permission
+profile) never see the decoy's path, so a `BLOCKED` verdict proves the hook
+fired end to end, and those layers are credited by `herkos check` instead.
+
 ```sh
 herkos probe                 # confirm, then probe every installed harness
 herkos probe --harness codex --yes --budget-usd 0.25
