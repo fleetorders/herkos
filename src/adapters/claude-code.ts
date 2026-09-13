@@ -18,6 +18,7 @@ import { blockLogFile, compile, loadEffectivePolicy } from "../policy.js";
 import type { CompiledPolicy, CompiledRule } from "../policy.js";
 import { COMMAND_KEYS, KNOWN_TOOLS, PATH_KEYS } from "../matchers.js";
 import { EXTRACT_AWK } from "../extract.js";
+import { WireRefusalError } from "./types.js";
 import type {
   HarnessAdapter,
   DetectResult,
@@ -247,20 +248,24 @@ function settingsPath(configDir: string): string {
   return path.join(configDir, "settings.json");
 }
 
-/** "a boolean" / "an array" / "null" — for messages about a wrong-shape value. */
+/** "a boolean" / "an array" / "an object" / "null" — for messages about a wrong-shape value. */
 function describeValue(v: unknown): string {
   if (Array.isArray(v)) return "an array";
   if (v === null) return "null";
+  if (typeof v === "object") return "an object";
   return `a ${typeof v}`;
 }
 
 /**
  * Read the harness settings and refuse anything herkos cannot merge into
- * safely: a file that is not valid JSON, a top level that is not an object, or
- * a `hooks`/`permissions`/`sandbox` that is not an object. Blindly casting the
- * latter crashed wire() mid-write — after the hook file was written but before
- * it was registered — leaving a stack trace and a half-applied install; this
- * gate runs BEFORE anything is written, so a refused init writes nothing.
+ * safely: a file that is not valid JSON, a top level that is not an object, a
+ * `hooks`/`permissions`/`sandbox` that is not an object, or a nested shape
+ * wire() dereferences that is not what it must be (`hooks.PreToolUse` an array
+ * of objects, `permissions.deny` an array, `sandbox.credentials` an object
+ * with `files` an array). Blindly casting any of these crashed wire()
+ * mid-write — after the hook file was written but before it was registered —
+ * leaving a stack trace and a half-applied install; this gate runs BEFORE
+ * anything is written, so a refused init writes nothing.
  */
 function readSettingsForWire(sp: string): {
   settings: Record<string, unknown>;
@@ -271,12 +276,12 @@ function readSettingsForWire(sp: string): {
   try {
     parsed = JSON.parse(fs.readFileSync(sp, "utf8"));
   } catch (e) {
-    throw new Error(
+    throw new WireRefusalError(
       `${sp} is not valid JSON (${String((e as Error).message)}) — fix or remove it, then re-run 'herkos init'`,
     );
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error(
+    throw new WireRefusalError(
       `${sp} holds ${describeValue(parsed)}, not a JSON object — fix or remove it, then re-run 'herkos init'`,
     );
   }
@@ -285,9 +290,65 @@ function readSettingsForWire(sp: string): {
     const v: unknown = settings[key];
     if (v === undefined) continue;
     if (typeof v !== "object" || v === null || Array.isArray(v)) {
-      throw new Error(
+      throw new WireRefusalError(
         `your settings.json has '${key}' as ${describeValue(v)} — herkos cannot merge into that; fix or remove it, then re-run 'herkos init'`,
       );
+    }
+  }
+  // One level deep is not enough for the "writes nothing" promise: wire()
+  // filters `hooks.PreToolUse` and reads `entry.hooks`, `permissions.deny`,
+  // `sandbox.credentials.files` — a wrong shape there throws (or silently
+  // replaces the user's value) after the hook file is already on disk.
+  const hooks = settings["hooks"] as Record<string, unknown> | undefined;
+  if (hooks) {
+    for (const event of ["PreToolUse", "SessionStart"]) {
+      const entries: unknown = hooks[event];
+      if (entries === undefined) continue;
+      if (!Array.isArray(entries)) {
+        throw new WireRefusalError(
+          `your settings.json has 'hooks.${event}' as ${describeValue(entries)} — herkos cannot merge into that; fix or remove it, then re-run 'herkos init'`,
+        );
+      }
+      for (const entry of entries) {
+        if (typeof entry !== "object" || entry === null) {
+          throw new WireRefusalError(
+            `your settings.json has a non-object entry in 'hooks.${event}' — herkos cannot merge into that; fix or remove it, then re-run 'herkos init'`,
+          );
+        }
+        const inner: unknown = (entry as { hooks?: unknown }).hooks;
+        if (inner === undefined) continue;
+        if (
+          !Array.isArray(inner) ||
+          inner.some((h) => typeof h !== "object" || h === null)
+        ) {
+          throw new WireRefusalError(
+            `your settings.json has an entry in 'hooks.${event}' whose 'hooks' is not a list of objects — herkos cannot merge into that; fix or remove it, then re-run 'herkos init'`,
+          );
+        }
+      }
+    }
+  }
+  const perms = settings["permissions"] as Record<string, unknown> | undefined;
+  if (perms && perms["deny"] !== undefined && !Array.isArray(perms["deny"])) {
+    throw new WireRefusalError(
+      `your settings.json has 'permissions.deny' as ${describeValue(perms["deny"])} — herkos cannot merge into that; fix or remove it, then re-run 'herkos init'`,
+    );
+  }
+  const sandbox = settings["sandbox"] as Record<string, unknown> | undefined;
+  if (sandbox) {
+    const cred: unknown = sandbox["credentials"];
+    if (cred !== undefined) {
+      if (typeof cred !== "object" || cred === null || Array.isArray(cred)) {
+        throw new WireRefusalError(
+          `your settings.json has 'sandbox.credentials' as ${describeValue(cred)} — herkos cannot merge into that; fix or remove it, then re-run 'herkos init'`,
+        );
+      }
+      const files: unknown = (cred as Record<string, unknown>)["files"];
+      if (files !== undefined && !Array.isArray(files)) {
+        throw new WireRefusalError(
+          `your settings.json has 'sandbox.credentials.files' as ${describeValue(files)} — herkos cannot merge into that; fix or remove it, then re-run 'herkos init'`,
+        );
+      }
     }
   }
   return { settings, existed: true };
@@ -351,8 +412,9 @@ export function generateHook(policy: CompiledPolicy): string {
   // the kind as "$2", so the same baked lines serve every tool argument found.
   //   enforce <id> <description> <kind> <subject> <regex> <exclude> <message>
   //   notice  <id> <message>     <kind> <subject> <regex> <exclude>
-  // <exclude> is the rule's notPaths alternation ("" for none): a subject it
-  // matches — the committed .env templates — never fires the rule.
+  // <exclude> is the rule's notPaths alternation ("" for none): a spelling it
+  // matches — the committed .env templates — never fires the rule, but it mutes
+  // only the token it matches, never the rest of the subject (see enforce).
   const line = (rule: CompiledRule, re: string): string =>
     rule.disposition === "open"
       ? `  notice ${shQuote(rule.id)} ${shQuote(rule.message || rule.description)} "$2" "$1" ${shQuote(re)} ${shQuote(rule.notPathRegex)}`
@@ -436,17 +498,34 @@ log_block() {
 }
 
 # enforce ID DESCRIPTION KIND SUBJECT REGEX EXCLUDE MESSAGE — grep the subject
-# against one compiled pattern, unless it matches EXCLUDE (the rule's own
-# benign-spelling exclusions, "" for none), in which case the rule never fires.
-# Match → block, naming the rule. No match → fall through. grep itself failing
-# (bad regex, exit >= 2) degrades LOUDLY: that one rule is off for this call
-# and the session keeps working; every other rule stays enforced. Never exit 2
-# because of a grep error.
+# against one compiled pattern. EXCLUDE (the rule's own benign-spelling
+# exclusions, "" for none) never mutes the rule for a whole subject that merely
+# CONTAINS an excluded spelling: once the pattern matches, every token that
+# matches an exclusion is removed from the subject and the pattern is re-tested
+# — the rule fires unless NOTHING that matches is left. "cat app/.env
+# app/.env.example" blocks on app/.env; a command naming only templates, or a
+# template beside unrelated files, stays allowed. (Tokens are split on space
+# and tab regardless of the caller's IFS; the callers run under set -f, so no
+# token is pathname-expanded. An exclusion grep that itself fails keeps the
+# token in — the failure leans toward blocking.) Match → block, naming the
+# rule. No match → fall through. grep itself failing (bad regex, exit >= 2)
+# degrades LOUDLY: that one rule is off for this call and the session keeps
+# working; every other rule stays enforced. Never exit 2 because of a grep
+# error.
 enforce() {
   [ -n "$5" ] || return 0
-  if [ -n "$6" ] && printf '%s' "$4" | grep -Eq -e "$6"; then return 0; fi
-  printf '%s' "$4" | grep -Eq -e "$5"
+  printf '%s' "$4" | grep -Eq -e "$5" 2>/dev/null
   rc=$?
+  if [ "$rc" -eq 0 ] && [ -n "$6" ]; then
+    oIFS=$IFS
+    IFS=" $TAB"
+    rest=""
+    for tok in $4; do
+      printf '%s' "$tok" | grep -Eq -e "$6" 2>/dev/null || rest="$rest$tok "
+    done
+    IFS=$oIFS
+    printf '%s' "$rest" | grep -Eq -e "$5" 2>/dev/null || return 0
+  fi
   if [ "$rc" -eq 0 ]; then
     log_block "$1"
     _m="BLOCKED (herkos) rule $1 — $2. This $3 is on the never-list. To adjust: narrow the rule in $POLICY_FILE or disable it by id; 'herkos rules' lists the policy."
@@ -461,11 +540,24 @@ enforce() {
 # notice ID MESSAGE KIND SUBJECT REGEX EXCLUDE — an OPEN rule: surface the
 # message to the session on a match and let the call THROUGH. Never blocks,
 # never changes the exit code, and a grep error just means no notice for this
-# call.
+# call. EXCLUDE removes its benign spellings exactly as in enforce, so an open
+# rule notices the secret beside a template and stays quiet for templates
+# alone.
 notice() {
   [ -n "$5" ] || return 0
-  if [ -n "$6" ] && printf '%s' "$4" | grep -Eq -e "$6" 2>/dev/null; then return 0; fi
-  if printf '%s' "$4" | grep -Eq -e "$5" 2>/dev/null; then
+  printf '%s' "$4" | grep -Eq -e "$5" 2>/dev/null
+  rc=$?
+  if [ "$rc" -eq 0 ] && [ -n "$6" ]; then
+    oIFS=$IFS
+    IFS=" $TAB"
+    rest=""
+    for tok in $4; do
+      printf '%s' "$tok" | grep -Eq -e "$6" 2>/dev/null || rest="$rest$tok "
+    done
+    IFS=$oIFS
+    printf '%s' "$rest" | grep -Eq -e "$5" 2>/dev/null || return 0
+  fi
+  if [ "$rc" -eq 0 ]; then
     printf 'herkos NOTICE (rule %s): %s\\n' "$1" "$2" >&2
   fi
   return 0

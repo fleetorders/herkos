@@ -269,8 +269,10 @@ Two properties keep it safe:
   It carries the policy stamp, so `herkos project check` in CI fails when someone
   edits `herkos.json` without re-running init.
 
+A `herkos.json` at the repo root (the file is strict JSON — comments are not
+valid in it, so a copy of this example works as-is):
+
 ```json
-// herkos.json at the repo root
 {
   "rules": [
     {
@@ -288,6 +290,12 @@ Two properties keep it safe:
   ]
 }
 ```
+
+`commandPrefixes` is a list of prefixes, each prefix itself a list of tokens
+with the program first: `[["git", "push"]]` refuses every `git push …`, and a
+one-token prefix like the one above refuses that script however it is invoked.
+A flat list (`["git", "push"]`) is rejected at `init` with the rule's id — the
+nesting is what says "these tokens, in order, as one command".
 
 **Claude Code only.** Codex resolves config from `~/.codex` with no repo-local
 layer, so a repo's Codex sessions rest on the machine policy, not the repo's own
