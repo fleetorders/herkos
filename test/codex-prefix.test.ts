@@ -271,4 +271,31 @@ describe("wiring the prefix rules into Codex", () => {
     expect(fs.existsSync(codexRulesPath())).toBe(false);
     codexAdapter.unwire();
   });
+
+  it("refuses a hooks.json it cannot merge into, writing nothing", () => {
+    process.env.HERKOS_CODEX_BIN = stub(ACCEPTS);
+    fs.writeFileSync(path.join(home, "hooks.json"), "{oops");
+    expect(() => codexAdapter.wire(compile(loadEffectivePolicy()))).toThrow(
+      /hooks\.json is not valid JSON/,
+    );
+    // The refusal came before any write: no config.toml rewrite, no hook.
+    expect(fs.existsSync(path.join(home, "config.toml"))).toBe(false);
+    // A wrong SHAPE is refused the same way, not cast into place.
+    fs.writeFileSync(
+      path.join(home, "hooks.json"),
+      JSON.stringify({ hooks: "x" }),
+    );
+    expect(() => codexAdapter.wire(compile(loadEffectivePolicy()))).toThrow(
+      /'hooks' as a string/,
+    );
+  });
+
+  it("warns loudly when uninstall cannot read hooks.json (the registration may survive)", () => {
+    process.env.HERKOS_CODEX_BIN = stub(ACCEPTS);
+    codexAdapter.wire(compile(loadEffectivePolicy()));
+    fs.writeFileSync(path.join(home, "hooks.json"), "{oops");
+    const r = codexAdapter.unwire();
+    expect(r.detail).toContain("WARNING");
+    expect(r.detail).toContain("could not be parsed");
+  });
 });

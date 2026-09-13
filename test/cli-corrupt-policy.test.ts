@@ -16,14 +16,24 @@ const { __test } = await import("../src/cli.js");
 describe("a corrupt policy file refuses cleanly in every command", () => {
   const policyFile = path.join(cfg, "policy.json");
   let captured = "";
+  let capturedStdout = "";
 
   beforeEach(() => {
     fs.writeFileSync(policyFile, '{ "rules": [ TRUNCATED');
     captured = "";
-    vi.spyOn(process.stdout, "write").mockImplementation(((
+    capturedStdout = "";
+    // The diagnosis goes to STDERR: stdout may be piped (`herkos check | grep`),
+    // and the reason for an exit 1 must reach the terminal being looked at.
+    vi.spyOn(process.stderr, "write").mockImplementation(((
       chunk: string | Uint8Array,
     ) => {
       captured += typeof chunk === "string" ? chunk : "";
+      return true;
+    }) as typeof process.stderr.write);
+    vi.spyOn(process.stdout, "write").mockImplementation(((
+      chunk: string | Uint8Array,
+    ) => {
+      capturedStdout += typeof chunk === "string" ? chunk : "";
       return true;
     }) as typeof process.stdout.write);
     vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
@@ -44,10 +54,12 @@ describe("a corrupt policy file refuses cleanly in every command", () => {
   ];
 
   for (const [name, run] of commands) {
-    it(`${name} prints one diagnosis line and exits 1, with no stack trace`, () => {
+    it(`${name} prints one diagnosis line to stderr and exits 1, with no stack trace`, () => {
       expect(run).toThrow("process.exit:1");
       expect(captured).toContain("herkos:");
       expect(captured).toContain("is not valid JSON");
+      // The diagnosis must not ride on stdout, where a pipe swallows it.
+      expect(capturedStdout).not.toContain("is not valid JSON");
       // A stack trace would carry "    at " lines; a diagnosis does not.
       expect(captured).not.toMatch(/\n\s+at\s/);
     });

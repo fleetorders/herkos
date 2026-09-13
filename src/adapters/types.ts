@@ -24,6 +24,16 @@ export interface WireResult {
   detail: string;
 }
 
+/**
+ * A refusal an adapter throws DELIBERATELY — a diagnosis for the user (harness
+ * settings of a shape herkos cannot merge into, a config file that is not valid
+ * JSON), thrown before anything is written, so a refused init is a clean no-op.
+ * `init` prints it as one line and exits 1. Anything else thrown out of wire()
+ * is a defect in herkos itself and gets its stack shown; the two must never
+ * look alike, or bug reports and typos become indistinguishable.
+ */
+export class WireRefusalError extends Error {}
+
 export interface VerifyResult {
   /** Is the never-list enforced as currently written? */
   ok: boolean;

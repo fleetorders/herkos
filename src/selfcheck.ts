@@ -46,6 +46,15 @@ export const CASES: CheckCase[] = [
     }),
   },
   {
+    name: "blocks a .env read beside a .env.example in one command (the exclusion mutes only the template)",
+    rule: "dotenv-files",
+    wantExit: 2,
+    payload: JSON.stringify({
+      tool_name: "Bash",
+      tool_input: { command: "cat ./app/.env ./app/.env.example" },
+    }),
+  },
+  {
     name: "blocks curl | sh",
     rule: "curl-pipe-shell",
     wantExit: 2,

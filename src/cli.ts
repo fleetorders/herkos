@@ -18,6 +18,7 @@ import {
 } from "./policy.js";
 import type { EffectivePolicy, ValidationResult } from "./policy.js";
 import { ADAPTERS, detectInstalled } from "./adapters/index.js";
+import { WireRefusalError } from "./adapters/types.js";
 import type { WireResult } from "./adapters/types.js";
 import { runSelfCheck, awkAvailable } from "./selfcheck.js";
 import { readBlockLog, summariseBlocks } from "./blocklog.js";
@@ -39,12 +40,14 @@ function printValidation(v: ValidationResult): void {
  * corrupt user policy file is a typo, and a typo is not a stack trace. Every
  * command that reads the policy goes through here, so `status`, `init`,
  * `check`, `rules`, `validate`, `discover` and `probe` all refuse cleanly.
+ * The diagnosis goes to stderr — stdout may be piped (`herkos check | grep`),
+ * and the reason for an exit 1 must reach the terminal the user is looking at.
  */
 function loadPolicyOrExit(): EffectivePolicy {
   try {
     return loadEffectivePolicy();
   } catch (e) {
-    process.stdout.write(pc.red(`herkos: ${(e as Error).message}\n`));
+    process.stderr.write(pc.red(`herkos: ${(e as Error).message}\n`));
     process.exit(1);
   }
 }
@@ -76,6 +79,7 @@ function initCmd(opts: { dryRun?: boolean }): void {
     process.stdout.write("  no supported harness detected on this machine\n");
     process.exit(1);
   }
+  const wiredNames: string[] = [];
   for (const a of installed) {
     const d = a.detect();
     if (opts.dryRun) {
@@ -88,14 +92,28 @@ function initCmd(opts: { dryRun?: boolean }): void {
     try {
       r = a.wire(policy);
     } catch (e) {
-      // A refusal from the adapter (e.g. harness settings of a shape herkos
-      // cannot merge into) is a diagnosis, not a stack trace — and nothing
-      // was written for that harness.
-      process.stdout.write(
-        pc.red(`herkos: could not wire ${a.name}: ${(e as Error).message}\n`),
-      );
+      // A refusal the adapter chose (harness settings of a shape herkos
+      // cannot merge into) is a one-line diagnosis; anything else is a defect
+      // in herkos and deserves its stack — the two must never look alike.
+      if (e instanceof WireRefusalError) {
+        process.stderr.write(
+          pc.red(`herkos: could not wire ${a.name}: ${e.message}\n`),
+        );
+      } else {
+        process.stderr.write(
+          pc.red(
+            `herkos: internal error while wiring ${a.name} — a bug in herkos, not your settings:\n${(e as Error).stack ?? String(e)}\n`,
+          ),
+        );
+      }
+      if (wiredNames.length > 0) {
+        process.stderr.write(
+          `herkos: ${wiredNames.join(", ")} ${wiredNames.length === 1 ? "was" : "were"} already wired and ${a.name} was not — fix the problem above and re-run 'herkos init' to finish, or 'herkos uninstall' to remove everything.\n`,
+        );
+      }
       process.exit(1);
     }
+    wiredNames.push(a.name);
     process.stdout.write(`  ${pc.green("wired")} ${a.name}: ${r.detail}\n`);
   }
   if (!opts.dryRun)
@@ -422,7 +440,8 @@ async function probeCmd(opts: {
     );
     timeoutS = parsePositiveNumber(opts.timeout, "timeout", DEFAULT_TIMEOUT_S);
   } catch (e) {
-    process.stdout.write(pc.red(`herkos: ${(e as Error).message}\n`));
+    // stderr, like every exit-1 diagnosis: a piped stdout would swallow it.
+    process.stderr.write(pc.red(`herkos: ${(e as Error).message}\n`));
     process.exit(1);
   }
   const timeoutMs = Math.max(10, timeoutS) * 1000;
