@@ -52,6 +52,38 @@ describe("wire() refuses wrong-shape harness settings cleanly", () => {
     ["the whole file is an array", "[]", /holds an array, not a JSON object/],
     ["the whole file is null", "null", /holds null, not a JSON object/],
     ["the file is not valid JSON", "{oops", /is not valid JSON/],
+    // Nested shapes wire() dereferences: these used to throw inside wire()
+    // after the hook file was already written — the half-applied install.
+    [
+      "hooks.PreToolUse is a string",
+      '{"hooks": {"PreToolUse": "x"}}',
+      /has 'hooks\.PreToolUse' as a string/,
+    ],
+    [
+      "hooks.SessionStart holds a null entry",
+      '{"hooks": {"SessionStart": [null]}}',
+      /non-object entry in 'hooks\.SessionStart'/,
+    ],
+    [
+      "a PreToolUse entry's hooks is a string",
+      '{"hooks": {"PreToolUse": [{"hooks": "x"}]}}',
+      /whose 'hooks' is not a list of objects/,
+    ],
+    [
+      "permissions.deny is a string",
+      '{"permissions": {"deny": "Read(~/x)"}}',
+      /has 'permissions\.deny' as a string/,
+    ],
+    [
+      "sandbox.credentials is an array",
+      '{"sandbox": {"credentials": []}}',
+      /has 'sandbox\.credentials' as an array/,
+    ],
+    [
+      "sandbox.credentials.files is an object",
+      '{"sandbox": {"credentials": {"files": {}}}}',
+      /has 'sandbox\.credentials\.files' as an object/,
+    ],
   ];
 
   for (const [name, contents, message] of cases) {
@@ -68,6 +100,24 @@ describe("wire() refuses wrong-shape harness settings cleanly", () => {
 
   it("still wires a well-formed settings file (the gate is not a veto)", () => {
     fs.writeFileSync(settingsFile(), JSON.stringify({ model: "x" }));
+    const r = claudeCodeAdapter.wire(compile(loadEffectivePolicy()));
+    expect(r.changed).toContain(hookPath());
+    expect(fs.existsSync(hookPath())).toBe(true);
+  });
+
+  it("still wires a settings file with user hook entries, deny rules and credential files (the deep gate is not a veto)", () => {
+    fs.writeFileSync(
+      settingsFile(),
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [
+            { matcher: "Bash", hooks: [{ type: "command", command: "echo hi" }] },
+          ],
+        },
+        permissions: { deny: ["Read(~/private)"] },
+        sandbox: { credentials: { files: [{ path: "~/x", mode: "ask" }] } },
+      }),
+    );
     const r = claudeCodeAdapter.wire(compile(loadEffectivePolicy()));
     expect(r.changed).toContain(hookPath());
     expect(fs.existsSync(hookPath())).toBe(true);

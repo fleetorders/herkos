@@ -248,14 +248,27 @@ describe("the .env templates are not refused (D-003: a false positive teaches us
     ).toBe(2);
   });
 
-  it("excludes only a template at the END of the value — a secret beside it still blocks", () => {
-    // Ends with the secret, so the template earlier does not mute the rule.
+  it("excludes only the benign spelling per token — a secret beside a template still blocks, whichever comes last", () => {
+    // Ends with the secret: the template earlier never muted the rule.
     expect(
       fireHook(
         scriptPath,
         bashPayload("diff app/.env.example app/.env.production"),
       ).exit,
     ).toBe(2);
+    // Ends with the template: the exclusion must mute only the template
+    // token, never the secret beside it in the same command. The whole-subject
+    // exclusion let this through (the whole-subject exclusion let this through).
+    expect(
+      fireHook(scriptPath, bashPayload("cat app/.env app/.env.example")).exit,
+    ).toBe(2);
+    // A benign multi-token command naming only templates stays allowed.
+    expect(
+      fireHook(
+        scriptPath,
+        bashPayload("cat app/.env.example app/.env.sample"),
+      ).exit,
+    ).toBe(0);
   });
 });
 
