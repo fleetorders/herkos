@@ -20,8 +20,11 @@
  * NAME, so a container without names cannot be read — it is announced, never
  * assumed safe.
  *
- * A value holding newlines becomes several records with the same tag, so every
- * line of a multi-line command is checked. Array elements are read one by one,
+ * A value's embedded newlines are folded to spaces, so one value is always ONE
+ * record, checked whole: a forbidden spelling cannot be split by a newline
+ * inside it (a pipeline continued onto the next line), and a `^`-anchored
+ * pattern anchors at the value's start, never at an embedded line start.
+ * Array elements are read one by one,
  * nested arrays included. Every copy of a duplicated key is read — a
  * last-value-wins parser would see only the final copy. `\uXXXX` escapes are
  * decoded in keys and values (non-ASCII becomes "?"), so an escaped spelling of
@@ -117,7 +120,7 @@ function fail(m) {
 }
 function put(tag, piece) {
   if (!openRec) { printf "%s\t", tag; openRec = 1 }
-  gsub(/\n/, "\n" tag "\t", piece)
+  gsub(/\n/, " ", piece)
   printf "%s", piece
 }
 function readstr(mode, tag,    buf, w, win, piece, ch, e, h, code, j) {

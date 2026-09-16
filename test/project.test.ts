@@ -113,6 +113,10 @@ describe("wiring a repo's project policy", () => {
     expect(cmd).toContain(
       "$CLAUDE_PROJECT_DIR/.claude/hooks/herkos-project.sh",
     );
+    // The registration itself degrades open on a missing hook file and names
+    // the harness (notice channel + blocked-call attribution).
+    expect(cmd).toContain("test -r");
+    expect(cmd).toContain("--harness claude-code");
   });
 
   it("bakes NO machine-specific path into the committed hook (public-repo safe)", () => {
@@ -245,6 +249,53 @@ describe("wiring a repo's project policy", () => {
     unwireProject(repo);
     const s = read() as Record<string, unknown>;
     expect(s.hooks).toBeUndefined();
+  });
+
+  it("degrades OPEN, not closed, when the committed hook file is missing", () => {
+    // The registration runs `sh <hook>`; on a missing script sh exits 2, which
+    // the harness reads as "block" — every tool call in the repo refused. The
+    // registered command checks readability first and exits 0 instead, while a
+    // deliberate exit-2 block from inside the hook still propagates.
+    writeJson("herkos.json", PROJECT);
+    wireProject(repo, compileProjectPolicy(repo).compiled);
+    const pre = read().hooks!.PreToolUse!;
+    const cmd = (pre[0] as { hooks: { command: string }[] }).hooks[0]!.command;
+    fs.rmSync(projectHookPath(repo)); // the committed file is gone
+    const r = spawnSync("sh", ["-c", cmd], {
+      input: call("Read", { file_path: "secrets/prod/db.json" }),
+      encoding: "utf8",
+      timeout: 10_000,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: repo },
+    });
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain("DEGRADED");
+  });
+
+  it("runs the hook with --harness claude-code, so an open rule's notice reaches the user", () => {
+    writeJson("herkos.json", {
+      rules: [
+        {
+          id: "ask-first",
+          class: "note",
+          disposition: "open",
+          description: "touching the prod dir",
+          message: "Ask before touching prod.",
+          paths: ["prod/"],
+        },
+      ],
+    });
+    wireProject(repo, compileProjectPolicy(repo).compiled);
+    const pre = read().hooks!.PreToolUse!;
+    const cmd = (pre[0] as { hooks: { command: string }[] }).hooks[0]!.command;
+    const r = spawnSync("sh", ["-c", cmd], {
+      input: call("Read", { file_path: "prod/deploy.conf" }),
+      encoding: "utf8",
+      timeout: 10_000,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: repo },
+    });
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout ?? "") as { systemMessage?: string };
+    expect(out.systemMessage).toContain("Ask before touching prod.");
   });
 });
 

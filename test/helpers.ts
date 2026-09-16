@@ -27,8 +27,9 @@ export function fireHook(
   scriptPath: string,
   payload: string,
   env: NodeJS.ProcessEnv = process.env,
+  args: string[] = [],
 ): { exit: number; stderr: string; stdout: string } {
-  const r = spawnSync("sh", [scriptPath], {
+  const r = spawnSync("sh", [scriptPath, ...args], {
     input: payload,
     encoding: "utf8",
     timeout: 10_000,

@@ -336,6 +336,10 @@ export function readInstalledStamp(file: string = hookPath()): string | null {
  * - blocks (exit 2, reason on stderr — the protocol Claude Code requires) when
  *   a Bash command or a file path matches the compiled never-list, naming the
  *   rule that fired;
+ * - surfaces an OPEN rule's message without blocking: printed to stderr as it
+ *   is collected, and on Claude Code also as a JSON systemMessage on stdout —
+ *   stderr at exit 0 reaches only the debug log there, so the JSON line is the
+ *   one channel that is both visible and non-blocking (D-005);
  * - fails OPEN but LOUD when it cannot parse its input (a security hook that
  *   hard-blocks on every malformed call would brick the session; one that
  *   silently allows would be worse — so it allows and announces). The same
@@ -398,6 +402,7 @@ EXTRACT_AWK=${shQuote(EXTRACT_AWK)}
 LOG_FILE=${shQuote(policy.logFile)}
 LOG_MAX_BYTES=${LOG_MAX_BYTES}
 TOOL=""
+NOTICES=""
 
 # The registered command names its harness, so a block is attributed to it.
 HARNESS=unknown
@@ -406,6 +411,7 @@ if [ "\${1:-}" = "--harness" ]; then
 fi
 
 block() {
+  flush_notices
   printf '%s\\n' "$1" >&2
   exit 2
 }
@@ -459,14 +465,34 @@ enforce() {
 }
 
 # notice ID MESSAGE KIND SUBJECT REGEX EXCLUDE — an OPEN rule: surface the
-# message to the session on a match and let the call THROUGH. Never blocks,
-# never changes the exit code, and a grep error just means no notice for this
-# call.
+# message on a match and let the call THROUGH. Never blocks, never changes the
+# exit code, and a grep error just means no notice for this call. The line goes
+# to stderr as it is collected, and is recorded for flush_notices — see there
+# for why stderr alone is not the surface.
 notice() {
   [ -n "$5" ] || return 0
   if [ -n "$6" ] && printf '%s' "$4" | grep -Eq -e "$6" 2>/dev/null; then return 0; fi
   if printf '%s' "$4" | grep -Eq -e "$5" 2>/dev/null; then
     printf 'herkos NOTICE (rule %s): %s\\n' "$1" "$2" >&2
+    NOTICES="\${NOTICES:+$NOTICES | }herkos NOTICE (rule $1): $2"
+  fi
+  return 0
+}
+
+# flush_notices — put the collected open-rule notices on the harness's
+# non-blocking, user-visible channel. On Claude Code, stderr from a hook that
+# exits 0 goes to the debug log only — the model never sees it and the user
+# never opens it — so a JSON systemMessage on stdout is what makes an open rule
+# heard; the alternatives all break the rule's own contract (permissionDecision
+# deny and exit 2 block the call; allow bypasses the permission prompt). The
+# model stays blind either way: stated, not hidden. Any other harness name (or
+# none): stderr as collected, because only Claude Code's channel is verified —
+# claiming another's would be a guarantee herkos cannot keep. Never changes the
+# exit code.
+flush_notices() {
+  [ -n "$NOTICES" ] || return 0
+  if [ "$HARNESS" = "claude-code" ]; then
+    printf '{"systemMessage":"%s"}\\n' "$(json "$NOTICES")"
   fi
   return 0
 }
@@ -549,6 +575,7 @@ IFS=$OLD_IFS
 # Past that, a payload that could not be read is announced, never assumed safe.
 if [ -n "$PARSE_ERROR" ]; then
   printf 'herkos DEGRADED: could not read this tool call (%s) — enforcement is OFF for the rest of this call.\\n' "$PARSE_ERROR" >&2
+  flush_notices
   exit 0
 fi
 
@@ -567,6 +594,7 @@ if [ -z "$COMMAND_VALUES" ] && [ -z "$PATH_VALUES" ] && [ -n "$TOOL" ]; then
       ;;
   esac
 fi
+flush_notices
 exit 0
 `;
 }
