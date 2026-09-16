@@ -20,6 +20,7 @@ import os from "node:os";
 import { spawnSync } from "node:child_process";
 import { collectCodexDeny, loadEffectivePolicy, compile } from "../policy.js";
 import type { CompiledPolicy } from "../policy.js";
+import { WireRefusalError } from "./types.js";
 import type {
   HarnessAdapter,
   DetectResult,
@@ -281,12 +282,59 @@ function rootLineActive(content: string): boolean {
   return !/^\s*\[/m.test(head);
 }
 
-// Wire the shared hook into Codex's hooks.json (root wrapper key "hooks").
-function wireHook(): void {
+/**
+ * Read Codex's hooks.json and refuse a shape herkos cannot merge into — the
+ * same contract as the Claude Code adapter's settings gate. A string `hooks`
+ * or a non-array `PreToolUse` would silently swallow the registration (or
+ * throw) mid-wire; wire() calls this BEFORE anything is written, so a refused
+ * init is a clean no-op.
+ */
+function readHooksDocForWire(): {
+  doc: { hooks?: Record<string, unknown[]> };
+  existed: boolean;
+} {
   const p = hooksJsonPath();
-  let doc: { hooks?: Record<string, unknown[]> } = {};
+  if (!fs.existsSync(p)) return { doc: {}, existed: false };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(p, "utf8"));
+  } catch (e) {
+    throw new WireRefusalError(
+      `${p} is not valid JSON (${String((e as Error).message)}) — fix or remove it, then re-run 'herkos init'`,
+    );
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new WireRefusalError(
+      `${p} holds ${Array.isArray(parsed) ? "an array" : parsed === null ? "null" : `a ${typeof parsed}`}, not a JSON object — fix or remove it, then re-run 'herkos init'`,
+    );
+  }
+  const doc = parsed as { hooks?: Record<string, unknown[]> };
+  const rawHooks: unknown = doc.hooks;
+  if (
+    rawHooks !== undefined &&
+    (typeof rawHooks !== "object" ||
+      rawHooks === null ||
+      Array.isArray(rawHooks))
+  ) {
+    throw new WireRefusalError(
+      `your hooks.json has 'hooks' as ${Array.isArray(rawHooks) ? "an array" : rawHooks === null ? "null" : `a ${typeof rawHooks}`} — herkos cannot merge into that; fix or remove it, then re-run 'herkos init'`,
+    );
+  }
+  const rawPre: unknown = (rawHooks as Record<string, unknown> | undefined)?.[
+    "PreToolUse"
+  ];
+  if (rawPre !== undefined && !Array.isArray(rawPre)) {
+    throw new WireRefusalError(
+      `your hooks.json has 'hooks.PreToolUse' as ${rawPre === null ? "null" : `a ${typeof rawPre}`} — herkos cannot merge into that; fix or remove it, then re-run 'herkos init'`,
+    );
+  }
+  return { doc, existed: true };
+}
+
+// Wire the shared hook into Codex's hooks.json (root wrapper key "hooks").
+function wireHook(doc: { hooks?: Record<string, unknown[]> }): void {
+  const p = hooksJsonPath();
   if (fs.existsSync(p)) {
-    doc = JSON.parse(fs.readFileSync(p, "utf8")) as typeof doc;
     const bak = `${p}.herkos-bak`;
     if (!fs.existsSync(bak)) fs.copyFileSync(p, bak);
   }
@@ -346,6 +394,11 @@ export const codexAdapter: HarnessAdapter = {
     const p = configPath();
     fs.mkdirSync(codexHome(), { recursive: true });
 
+    // 0. Refuse a hooks.json herkos cannot merge into BEFORE anything is
+    //    written, so a refused init is a clean no-op (no config.toml rewrite,
+    //    no hook file, no half-applied install).
+    const hooksDoc = readHooksDocForWire();
+
     // 1. credential-read → permission-profile deny (config.toml managed block)
     let content = "";
     if (fs.existsSync(p)) {
@@ -369,7 +422,7 @@ export const codexAdapter: HarnessAdapter = {
     // 2. fetched-exec → shared hook, wired into hooks.json (needs /hooks trust)
     fs.mkdirSync(path.dirname(hookPath()), { recursive: true });
     fs.writeFileSync(hookPath(), generateHook(policy), { mode: 0o755 });
-    wireHook();
+    wireHook(hooksDoc.doc);
     changed.push(hookPath(), hooksJsonPath());
 
     // 3. prefix-shaped command rules → execpolicy forbidden rules: live at
@@ -437,12 +490,17 @@ export const codexAdapter: HarnessAdapter = {
       }
     }
     const hp = hooksJsonPath();
+    let hooksJsonUnreadable = false;
     if (fs.existsSync(hp)) {
       let doc: { hooks?: Record<string, unknown[]> } = {};
       try {
         doc = JSON.parse(fs.readFileSync(hp, "utf8")) as typeof doc;
       } catch {
-        doc = {}; // unreadable: nothing of ours is provably in there; leave it
+        // Leave the file alone, but say so: an unreadable hooks.json is
+        // exactly where our registration can survive an uninstall that
+        // reported success (degrade loudly, never fail silently).
+        doc = {};
+        hooksJsonUnreadable = true;
       }
       const hooks = doc.hooks ?? {};
       const pre = hooks["PreToolUse"];
@@ -483,9 +541,11 @@ export const codexAdapter: HarnessAdapter = {
     fs.rmSync(codexOwnedPath(), { force: true });
     return {
       changed,
-      detail: changed.length
-        ? "herkos Codex wiring removed"
-        : "nothing to remove",
+      detail:
+        (changed.length ? "herkos Codex wiring removed" : "nothing to remove") +
+        (hooksJsonUnreadable
+          ? ` — WARNING: ${hp} could not be parsed, so herkos's PreToolUse registration may still be in it; fix or delete that file by hand and re-run 'herkos uninstall'`
+          : ""),
     };
   },
 

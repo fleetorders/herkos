@@ -52,12 +52,14 @@ export interface Rule {
   /** Path fragments matched as substrings against file paths AND command text (credential-read). */
   paths?: string[];
   /**
-   * Extended regexes that UN-match: a path or command text that matches any of
-   * these never fires this rule, even when its `paths` fragment does. The escape
-   * hatch for a fragment that is right in general and wrong for a well-known
-   * benign spelling — the committed `.env` templates. Raw regexes (not escaped
-   * fragments) evaluated by the same `grep -E` as command patterns, so `$`
-   * anchors at the end of the value.
+   * Extended regexes that UN-match: a token that matches any of these never
+   * fires this rule, even when its `paths` fragment does — but an exclusion
+   * mutes only the token it matches, never the rest of the value, so a secret
+   * spelling beside a benign one in one command still fires the rule. The
+   * escape hatch for a fragment that is right in general and wrong for a
+   * well-known benign spelling — the committed `.env` templates. Raw regexes
+   * (not escaped fragments) evaluated by the same `grep -E` as command
+   * patterns, so `$` anchors at the end of the token.
    */
   notPaths?: string[];
   /** Extended regexes matched against command text (fetched-exec / command-shaped rules). */
@@ -493,24 +495,34 @@ function checkPrefixes(rid: string, prefixes: unknown, errors: string[]): void {
 
 /** Does this rule match the text, by the hook's own evaluator (`grep -E`)? */
 function ruleMatches(rule: Rule, text: string): boolean {
-  const grep = (re: string): boolean =>
+  const grep = (re: string, input: string): boolean =>
     spawnSync("grep", ["-E", "-q", "-e", re], {
-      input: text,
+      input,
       encoding: "utf8",
       timeout: 5_000,
     }).status === 0;
-  // An exclusion the example matches means the rule never fires for it, the
-  // same as in the hook.
+  const matches = (input: string): boolean => {
+    const paths = rule.paths ?? [];
+    const regexes = [
+      ...(paths.length > 0 ? [paths.map(escapeERE).join("|")] : []),
+      ...((rule.commandPatterns ?? []).length > 0
+        ? (rule.commandPatterns ?? [])
+        : (rule.commandPrefixes ?? []).map(prefixRegex)),
+    ];
+    return regexes.some((re) => grep(re, input));
+  };
+  if (!matches(text)) return false;
+  // An exclusion removes the benign spellings it matches and the rule is
+  // re-tested on what remains — exactly the hook's enforce(): a secret
+  // spelling beside a template still counts as matched, templates alone do not.
   const notPaths = rule.notPaths ?? [];
-  if (notPaths.length > 0 && grep(notPaths.join("|"))) return false;
-  const paths = rule.paths ?? [];
-  const regexes = [
-    ...(paths.length > 0 ? [paths.map(escapeERE).join("|")] : []),
-    ...((rule.commandPatterns ?? []).length > 0
-      ? (rule.commandPatterns ?? [])
-      : (rule.commandPrefixes ?? []).map(prefixRegex)),
-  ];
-  return regexes.some(grep);
+  if (notPaths.length === 0) return true;
+  const excl = notPaths.join("|");
+  const rest = text
+    .split(/\s+/)
+    .filter((t) => t !== "" && !grep(excl, t))
+    .join(" ");
+  return matches(rest);
 }
 
 /** Run a rule's `match` / `notMatch` examples against the rule itself. */
@@ -685,7 +697,7 @@ export interface CompiledRule {
   message: string;
   /** POSIX extended regex alternation of this rule's escaped path fragments ("" if none). */
   pathRegex: string;
-  /** This rule's exclusion regexes joined into one alternation ("" if none) — a subject it matches never fires the rule. */
+  /** This rule's exclusion regexes joined into one alternation ("" if none) — a token it matches never fires the rule; the rest of the subject is still checked. */
   notPathRegex: string;
   /** This rule's extended regexes for command text. */
   commandRegexes: string[];
