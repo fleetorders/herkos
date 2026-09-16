@@ -219,8 +219,11 @@ Some of the rules you actually want are not absolute "never"s but "not without
 asking" — never push shared history, never write to prod, never send data
 outward — where a hard block is too blunt. Give such a rule
 `"disposition": "open"` and a `message`: when it matches, herkos lets the call
-through and surfaces the message to the session as a notice, instead of blocking.
-An open rule grants nothing and gates nothing — it is advisory — so it is not a
+through and surfaces the message as a notice, instead of blocking. On Claude
+Code the notice is shown to you as a system message in the transcript; the
+agent itself does not see it — no non-blocking channel reaches the model — so
+an open rule guides you, it cannot nudge the agent. An open rule grants nothing
+and gates nothing — it is advisory — so it is not a
 permission or an allow-list. Rules also carry their own **class** label (any
 simple word) and an optional `message`, so a refusal names the real rule instead
 of forcing it into one of the two built-in classes.

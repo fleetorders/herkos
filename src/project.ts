@@ -45,7 +45,14 @@ import {
 
 /** The repo-relative path Claude Code resolves for the committed hook. */
 const HOOK_REL = ".claude/hooks/herkos-project.sh";
-const HOOK_COMMAND = `sh "$CLAUDE_PROJECT_DIR/${HOOK_REL}"`;
+// Registered so the harness contract holds at the edges too: a missing or
+// unreadable hook file must degrade OPEN (plain `sh` on a missing script exits
+// 2, which the harness reads as "block" — every tool call in the repo refused,
+// the opposite of the hook body's own degrade-to-allow design), while a
+// deliberate exit-2 block from inside the hook still propagates; and
+// --harness names the caller, so an open rule's notice picks its channel and a
+// block is attributed in the blocked-call log.
+const HOOK_COMMAND = `test -r "$CLAUDE_PROJECT_DIR/${HOOK_REL}" || { printf 'herkos DEGRADED: project hook not readable — enforcement OFF for this call.\\n' >&2; exit 0; }; sh "$CLAUDE_PROJECT_DIR/${HOOK_REL}" --harness claude-code`;
 
 export function projectHookPath(repoRoot: string): string {
   return path.join(repoRoot, HOOK_REL);
