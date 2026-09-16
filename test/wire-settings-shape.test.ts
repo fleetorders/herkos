@@ -111,7 +111,10 @@ describe("wire() refuses wrong-shape harness settings cleanly", () => {
       JSON.stringify({
         hooks: {
           PreToolUse: [
-            { matcher: "Bash", hooks: [{ type: "command", command: "echo hi" }] },
+            {
+              matcher: "Bash",
+              hooks: [{ type: "command", command: "echo hi" }],
+            },
           ],
         },
         permissions: { deny: ["Read(~/private)"] },

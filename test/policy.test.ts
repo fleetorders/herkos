@@ -264,10 +264,8 @@ describe("the .env templates are not refused (D-003: a false positive teaches us
     ).toBe(2);
     // A benign multi-token command naming only templates stays allowed.
     expect(
-      fireHook(
-        scriptPath,
-        bashPayload("cat app/.env.example app/.env.sample"),
-      ).exit,
+      fireHook(scriptPath, bashPayload("cat app/.env.example app/.env.sample"))
+        .exit,
     ).toBe(0);
   });
 });
