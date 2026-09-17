@@ -65,17 +65,22 @@ export interface Rule {
    * Must be ASCII: the hook's payload reader decodes tool-call text to ASCII
    * (non-ASCII becomes `?`, control characters become spaces — see extract.ts),
    * so a pattern carrying anything else can never match what the hook checks.
-   * Validation warns when it sees one.
+   * Validation warns when it sees one. Patterns are also single-line: command
+   * text is enforced line by line, so a pattern can never match across a line
+   * boundary — a multi-line-shaped pattern is silently never-matching, which
+   * this note is here to prevent.
    */
   commandPatterns?: string[];
   /**
    * Command prefixes as argument tokens, program first (`["git", "push"]`).
-   * A harness with a native prefix-rule layer enforces these directly — on
-   * Codex that layer needs no trust step, unlike its hooks. Only a rule that
-   * genuinely IS a prefix belongs here: a pipeline such as fetched code piped
-   * to a shell cannot be one without forbidding the shell outright. When a
-   * rule has prefixes but no `commandPatterns`, the hook's patterns are derived
-   * from them, so every harness still enforces the rule.
+   * Like commandPatterns, single-line: command text is enforced line by line,
+   * so a prefix can never match across a line boundary. A harness with a
+   * native prefix-rule layer enforces these directly — on Codex that layer
+   * needs no trust step, unlike its hooks. Only a rule that genuinely IS a
+   * prefix belongs here: a pipeline such as fetched code piped to a shell
+   * cannot be one without forbidding the shell outright. When a rule has
+   * prefixes but no `commandPatterns`, the hook's patterns are derived from
+   * them, so every harness still enforces the rule.
    */
   commandPrefixes?: string[][];
   /**
@@ -419,6 +424,17 @@ function grepAccepts(pattern: string): { ok: boolean; detail: string } {
   };
 }
 
+/** Does `re` match `text`, by the hook's own evaluator (`grep -E`)? */
+function grepMatches(re: string, text: string): boolean {
+  return (
+    spawnSync("grep", ["-E", "-q", "-e", re], {
+      input: text,
+      encoding: "utf8",
+      timeout: 5_000,
+    }).status === 0
+  );
+}
+
 function checkEntries(
   rid: string,
   key: "paths" | "notPaths" | "commandPatterns" | "codexDeny" | "denyRead",
@@ -499,16 +515,12 @@ function checkPrefixes(rid: string, prefixes: unknown, errors: string[]): void {
 
 /** Does this rule match the text, by the hook's own evaluator (`grep -E`)? */
 function ruleMatches(rule: Rule, text: string): boolean {
-  const grep = (re: string): boolean =>
-    spawnSync("grep", ["-E", "-q", "-e", re], {
-      input: text,
-      encoding: "utf8",
-      timeout: 5_000,
-    }).status === 0;
   // An exclusion the example matches means the rule never fires for it, the
   // same as in the hook.
   const notPaths = rule.notPaths ?? [];
-  if (notPaths.length > 0 && grep(notPaths.join("|"))) return false;
+  if (notPaths.length > 0 && grepMatches(notPaths.join("|"), text)) {
+    return false;
+  }
   const paths = rule.paths ?? [];
   const regexes = [
     ...(paths.length > 0 ? [paths.map(escapeERE).join("|")] : []),
@@ -516,7 +528,36 @@ function ruleMatches(rule: Rule, text: string): boolean {
       ? (rule.commandPatterns ?? [])
       : (rule.commandPrefixes ?? []).map(prefixRegex)),
   ];
-  return regexes.some(grep);
+  return regexes.some((re) => grepMatches(re, text));
+}
+
+/**
+ * Warn when one prefix's generated pattern subsumes another's within the same
+ * rule. The hook bakes one notice/enforce line per prefix, so a subsumed
+ * spelling fires the identical notice twice on an open rule — the natural
+ * shape is the same path spelled `./script` beside `script`, where the leading
+ * boundary class is satisfied by the slash. Testing one prefix's compiled
+ * pattern against the other's space-delimited spelling is a sound subsumption
+ * test for these boundary-anchored patterns: a probe match sits on token
+ * boundaries that exist in every string the narrow prefix matches. A warning,
+ * never an error — a redundant prefix costs a duplicate notice, not safety.
+ */
+function warnSubsumedPrefixes(
+  rid: string,
+  prefixes: string[][],
+  warnings: string[],
+): void {
+  const spell = (p: string[]): string => p.join(" ");
+  for (let i = 0; i < prefixes.length; i++) {
+    for (let j = 0; j < prefixes.length; j++) {
+      if (i === j) continue;
+      if (grepMatches(prefixRegex(prefixes[i]!), ` ${spell(prefixes[j]!)} `)) {
+        warnings.push(
+          `rule ${rid}: commandPrefixes entry ${j + 1} (${JSON.stringify(spell(prefixes[j]!))}) is subsumed by entry ${i + 1} (${JSON.stringify(spell(prefixes[i]!))}) — every call it catches already fires this rule, so an open rule prints its notice twice; drop the narrower spelling`,
+        );
+      }
+    }
+  }
 }
 
 /** Run a rule's `match` / `notMatch` examples against the rule itself. */
@@ -537,7 +578,7 @@ function checkExamples(rid: string, rule: Rule, errors: string[]): void {
       errors.push(
         want
           ? `rule ${rid}: match example ${i + 1} (${JSON.stringify(example)}) is not matched by the rule`
-          : `rule ${rid}: notMatch example ${i + 1} (${JSON.stringify(example)}) is matched by the rule — that call would be refused`,
+          : `rule ${rid}: notMatch example ${i + 1} (${JSON.stringify(example)}) is matched by the rule — that call would fire the rule`,
       );
     });
   }
@@ -617,6 +658,21 @@ export function validatePolicy(policy: EffectivePolicy): ValidationResult {
       );
     }
     checkPrefixes(rid, rule.commandPrefixes, errors);
+    warnSubsumedPrefixes(
+      rid,
+      Array.isArray(rule.commandPrefixes)
+        ? rule.commandPrefixes.filter(
+            (p): p is string[] =>
+              Array.isArray(p) &&
+              p.length > 0 &&
+              p.every(
+                (t) =>
+                  typeof t === "string" && t.length > 0 && !/[\r\n]/.test(t),
+              ),
+          )
+        : [],
+      warnings,
+    );
     // What a pattern can match is bounded by what the hook's reader decodes:
     // ASCII only (non-ASCII becomes "?", control characters become spaces —
     // extract.ts). A non-ASCII pattern can never match; say so at the door

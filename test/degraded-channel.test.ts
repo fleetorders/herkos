@@ -64,6 +64,43 @@ describe("a degradation is heard, not only logged (D-008)", () => {
     expect(systemMessage(r.stdout)).toContain("could not be evaluated");
   });
 
+  it("degrades loudly, rule named, when a block rule's EXCLUDE regex breaks", () => {
+    // A broken exclusion used to read as "does not match", silently flipping
+    // the verdict as if the carve-out did not exist — and dumping raw grep
+    // text into the session. It now rides the same degrade path as the main
+    // pattern: rule off for the call, said on the heard channel, nothing raw.
+    write({
+      rules: [
+        {
+          id: "no-secrets",
+          class: "credential-read",
+          description: "secrets dir",
+          paths: ["secrets/"],
+          notPaths: ["("],
+        },
+      ],
+    });
+    const r = fire(
+      withSession(
+        "sess-excl",
+        call("Read", { file_path: "secrets/prod/db.json" }),
+      ),
+      cc,
+    );
+    // The main pattern would match — but an unevaluable exclusion means the
+    // rule cannot be applied correctly, so it is OFF for the call, loudly.
+    expect(r.exit).toBe(0);
+    expect(r.stderr).toContain(
+      "rule no-secrets exclude pattern could not be evaluated",
+    );
+    expect(r.stderr).not.toMatch(/grep:/); // no raw grep error text
+    expect(systemMessage(r.stdout)).toContain(
+      "exclude pattern could not be evaluated",
+    );
+    // And it is sticky: the session marker a later call re-announces.
+    expect(fs.existsSync(path.join(stateDir, "degraded-sess-excl"))).toBe(true);
+  });
+
   it("announces a value the reader decoded lossily instead of silently mangling it", () => {
     const raw =
       '{"tool_name":"Bash","tool_input":{"command":"caf\\u00e9 au lait"}}';

@@ -192,3 +192,42 @@ that too, on its own call. Fail-closed for catastrophic rules remains open to
 the maintainer: if it flips, D-004's session-bricking argument needs an
 answer first (a malformed-payload block loop with no user watching is a
 session wedged by its own guard).
+
+### D-009 — An unevaluable exclusion degrades the rule; subsumed prefixes warn
+
+**Scope:** repo · **Decided:** 2026-09-17
+
+A block rule's exclusion regex (`notPaths`) is now evaluated with the same
+care as its main pattern in the generated hook: silenced, status-checked, and
+an exit ≥ 2 turns that ONE rule off for the call with a loud, sticky
+announcement naming the rule — instead of reading as "does not match" and
+letting the rule fire on the main pattern as if the carve-out did not exist.
+`validate` and `project init` also warn when one command prefix's generated
+pattern subsumes another's within a rule, and `project init` names the
+one-time settings backup it takes.
+
+**Why:** the exclusion is half of the rule's verdict, so an unevaluable
+exclusion is an unevaluable rule — treating grep's error exit as "no match"
+was a silent verdict flip that only the main pattern's own failure caught.
+Rule-off-loud matches the posture every other grep failure already takes
+(D-004/D-008): the alternative, firing the main pattern as if no exclusion
+existed, is fail-closed against exactly the benign spellings the exclusion
+exists to spare (.env templates), and a false block is how a guard gets
+disabled. The subsumption warning exists because the natural policy shape —
+the same script spelled `./script` beside `script` — bakes two rule lines
+whose boundary classes make the second redundant, printing the identical
+notice twice on an open rule; it is a warning, not an error, because a
+redundant prefix costs a duplicate line, not safety (curation bar: warnings
+inform, errors refuse).
+
+**Consequences:** a policy with a broken exclusion now leaves that rule
+unenforced-but-announced rather than mis-enforced — the honest direction for
+a guard whose loudness is the product. The subsumption probe tests one
+prefix's compiled pattern against the other's space-delimited spelling, which
+is exact for these boundary-anchored patterns; a policy carrying genuinely
+overlapping prefixes on purpose (one line per spelling for readability) will
+be told so on every validate and can ignore it. Re-running `project init`
+over a registration the repo hardened itself replaces it with the stock
+hardened command (fail-open guard, harness named) — equivalent hardening,
+not byte-preservation of consumer edits; a repo needing MORE than that keeps
+its own line by re-editing after init.

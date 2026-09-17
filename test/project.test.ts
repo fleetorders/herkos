@@ -297,6 +297,35 @@ describe("wiring a repo's project policy", () => {
     const out = JSON.parse(r.stdout ?? "") as { systemMessage?: string };
     expect(out.systemMessage).toContain("Ask before touching prod.");
   });
+
+  it("a regen over a hardened registration keeps the hardening (no silent clobber)", () => {
+    // A repo may commit a registration it tightened itself — fail-open on an
+    // unreadable hook, harness named — instead of the stock command. Every
+    // policy edit walks through `project init`, so a regen must land on a
+    // command at least as hardened, never silently back on the bare
+    // `sh <hook>` line.
+    const HARDENED =
+      'test -r "$CLAUDE_PROJECT_DIR/.claude/hooks/herkos-project.sh" || exit 0; sh "$CLAUDE_PROJECT_DIR/.claude/hooks/herkos-project.sh" --harness claude-code';
+    writeJson(".claude/settings.json", {
+      hooks: {
+        PreToolUse: [
+          { matcher: "*", hooks: [{ type: "command", command: HARDENED }] },
+        ],
+      },
+    });
+    writeJson("herkos.json", PROJECT);
+    const r = wireProject(repo, compileProjectPolicy(repo).compiled);
+    const pre = read().hooks!.PreToolUse!;
+    expect(pre).toHaveLength(1); // replaced, never duplicated
+    const cmd = (pre[0] as { hooks: { command: string }[] }).hooks[0]!.command;
+    // The equivalent hardened form: still fail-open when the hook is
+    // unreadable, still naming the harness (notice channel, block attribution).
+    expect(cmd).toContain("test -r");
+    expect(cmd).toContain("exit 0");
+    expect(cmd).toContain("--harness claude-code");
+    // The one-time settings backup is named in the output, not left silently.
+    expect(r.detail).toContain(".claude/settings.json.herkos-bak");
+  });
 });
 
 describe("verifyProject — the CI drift check", () => {
