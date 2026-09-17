@@ -116,6 +116,7 @@ export function wireProject(
   // 2. Register it on PreToolUse in the repo's project settings.
   const sp = projectSettingsPath(repoRoot);
   let settings: Record<string, unknown> = {};
+  let backedUp = false;
   if (fs.existsSync(sp)) {
     settings = JSON.parse(fs.readFileSync(sp, "utf8")) as Record<
       string,
@@ -125,6 +126,7 @@ export function wireProject(
     if (!fs.existsSync(bak)) {
       fs.copyFileSync(sp, bak);
       changed.push(bak);
+      backedUp = true;
     }
   }
   const rawHooks = settings["hooks"];
@@ -148,7 +150,7 @@ export function wireProject(
   return {
     changed,
     ruleCount: compiled.ruleCount,
-    detail: `project hook generated (${compiled.ruleCount} rule(s), stamp ${stampOf(compiled)}) and registered on PreToolUse in ${path.relative(repoRoot, sp) || sp}. Commit .claude/ so every clone is guarded; it composes on top of each contributor's machine policy and can only add blocks.`,
+    detail: `project hook generated (${compiled.ruleCount} rule(s), stamp ${stampOf(compiled)}) and registered on PreToolUse in ${path.relative(repoRoot, sp) || sp}.${backedUp ? ` A one-time pre-herkos backup of the previous settings sits at ${path.relative(repoRoot, `${sp}.herkos-bak`)} — untracked; delete it (or commit it) once the wiring looks right.` : ""} Commit .claude/ so every clone is guarded; it composes on top of each contributor's machine policy and can only add blocks.`,
   };
 }
 

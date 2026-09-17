@@ -183,13 +183,18 @@ describe("rule examples", () => {
     );
   });
 
-  it("reports a notMatch example the rule would refuse", () => {
+  it("reports a notMatch example the rule would fire", () => {
     fs.writeFileSync(
       policyFile,
       withExamples({ notMatch: ["git push --force"] }),
     );
     expect(validatePolicy(loadEffectivePolicy()).errors.join("\n")).toContain(
       "notMatch example 1",
+    );
+    // The wording fits both dispositions: a block rule refuses the call, an
+    // open rule lets it through with a notice — both fire.
+    expect(validatePolicy(loadEffectivePolicy()).errors.join("\n")).toContain(
+      "would fire the rule",
     );
   });
 

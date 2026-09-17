@@ -404,8 +404,9 @@ export function readInstalledStamp(file: string = hookPath()): string | null {
  * - fails OPEN but LOUD when it cannot parse its input (a security hook that
  *   hard-blocks on every malformed call would brick the session; one that
  *   silently allows would be worse — so it allows and announces). The same
- *   applies per-rule at grep time: a pattern grep cannot evaluate turns that
- *   ONE rule off for the call, loudly, and the rest of the never-list stays
+ *   applies per-rule at grep time: a pattern grep cannot evaluate — the rule's
+ *   own or its exclusion — turns that ONE rule off for the call, loudly, and
+ *   the rest of the never-list stays
  *   enforced — never exit 2 on a grep error. Since D-008 the announcements
  *   ride the heard channel with the notices, and a degradation marks the
  *   session so every later call in it keeps saying it — a degradation seen
@@ -528,14 +529,24 @@ log_block() {
 # app/.env.example" blocks on app/.env; a command naming only templates, or a
 # template beside unrelated files, stays allowed. (Tokens are split on space
 # and tab regardless of the caller's IFS; the callers run under set -f, so no
-# token is pathname-expanded. An exclusion grep that itself fails keeps the
-# token in — the failure leans toward blocking.) Match → block, naming the
-# rule. No match → fall through. grep itself failing (bad regex, exit >= 2)
-# degrades LOUDLY: that one rule is off for this call and the session keeps
-# working; every other rule stays enforced. Never exit 2 because of a grep
-# error.
+# token is pathname-expanded.) Match → block, naming the rule. No match → fall
+# through. grep itself failing (bad regex, exit >= 2) degrades LOUDLY — on
+# EITHER pattern: the rule's own or its exclusion, since an unevaluable
+# exclusion would otherwise flip verdicts silently (exit 2 reads as "no
+# match", the rule fires as if the carve-out did not exist). That one rule is
+# off for this call and the session keeps working; every other rule stays
+# enforced. Never exit 2 because of a grep error, and never let one dump raw
+# grep text into the session.
 enforce() {
   [ -n "$5" ] || return 0
+  if [ -n "$6" ]; then
+    printf '%s' "$4" | grep -Eq -e "$6" 2>/dev/null
+    xrc=$?
+    if [ "$xrc" -ge 2 ]; then
+      degrade "rule $1 exclude pattern could not be evaluated (grep exit $xrc) — that rule is OFF for this call. Run 'herkos validate'."
+      return 0
+    fi
+  fi
   printf '%s' "$4" | grep -Eq -e "$5" 2>/dev/null
   rc=$?
   if [ "$rc" -eq 0 ] && [ -n "$6" ]; then

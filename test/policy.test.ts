@@ -186,6 +186,43 @@ describe("policy validation", () => {
     expect(v.errors.every((e) => !/[\r\n]/.test(e))).toBe(true);
   });
 
+  it("warns when one prefix's generated pattern subsumes another's", () => {
+    // The natural trap: the same script spelled with and without "./", where
+    // the leading boundary class is satisfied by the slash — every call the
+    // second prefix catches already fires the first, printing the rule twice.
+    const v = validatePolicy(
+      policyWith({
+        commandPatterns: undefined,
+        commandPrefixes: [
+          ["scripts/deploy-lab.sh"],
+          ["./scripts/deploy-lab.sh"],
+        ],
+      }),
+    );
+    expect(v.errors).toEqual([]);
+    expect(
+      v.warnings.some(
+        (w) =>
+          w.includes("subsumed") &&
+          w.includes("./scripts/deploy-lab.sh") &&
+          w.includes("drop the narrower spelling"),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not warn on prefixes that merely share a first token", () => {
+    const v = validatePolicy(
+      policyWith({
+        commandPatterns: undefined,
+        commandPrefixes: [
+          ["git", "push"],
+          ["git", "status"],
+        ],
+      }),
+    );
+    expect(v.warnings.filter((w) => w.includes("subsumed"))).toEqual([]);
+  });
+
   it("rejects a duplicate id and a missing id", () => {
     const v = validatePolicy({
       rules: [
