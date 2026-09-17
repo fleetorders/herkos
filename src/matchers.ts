@@ -72,27 +72,51 @@ export const COMMAND_KEYS: readonly string[] = [
 ];
 
 /**
- * Tools whose argument shape herkos knows. A call to a tool OUTSIDE this list
- * whose arguments carry none of the names above is reported as uncovered — the
- * honest answer, since herkos genuinely cannot see what it would touch. Known
- * tools that legitimately take no path (a to-do list, a web search) stay quiet:
- * an announcement on every call is noise, and noise is how a guard gets muted.
+ * Tools whose every well-formed call carries an argument herkos expects to
+ * read — a command (Bash, PowerShell) or a path (the file, notebook and
+ * directory tools). Their arguments ARE the risk the never-list polices, so
+ * they get no quiet treatment: a payload that parses cleanly but yields NO
+ * readable value is schema drift (the harness renamed or restructured the very
+ * keys the rules are checked against), and the call is announced UNCOVERED
+ * exactly like an unknown tool — once per session and tool on the heard
+ * channel, D-008 — instead of being muted into silent non-enforcement.
+ *
+ * Deliberately NOT here, though their names suggest it:
+ * - `Glob` / `Grep` — their primary argument is `pattern`, which herkos
+ *   deliberately does not read (a search naming a token file is not a read),
+ *   so a call that yields nothing is their normal shape, not drift; announcing
+ *   it would fire on every search and mute the guard.
+ * - `WebFetch` / `WebSearch` — URLs and queries are never paths or commands
+ *   in herkos's vocabularies; a zero-yield call is every call.
  */
-export const KNOWN_TOOLS: readonly string[] = [
+export const PATH_BEARING_TOOLS: readonly string[] = [
   "Bash",
-  "BashOutput",
-  "KillBash",
-  "KillShell",
+  "PowerShell",
   "Read",
   "Write",
   "Edit",
   "MultiEdit",
   "NotebookEdit",
   "NotebookRead",
+  "LS",
+];
+
+/**
+ * Tools whose argument shape herkos knows AND whose well-formed calls
+ * legitimately carry nothing herkos reads — the quiet list. A call to a tool
+ * OUTSIDE this list whose arguments carry none of the names above is reported
+ * as uncovered — the honest answer, since herkos genuinely cannot see what it
+ * would touch. Tools here stay quiet because an announcement on every call is
+ * noise, and noise is how a guard gets muted; tools whose arguments are
+ * themselves the risk sit in PATH_BEARING_TOOLS above instead, so schema drift
+ * on them is announced rather than muted.
+ */
+export const KNOWN_TOOLS: readonly string[] = [
+  "BashOutput",
+  "KillBash",
+  "KillShell",
   "Glob",
   "Grep",
-  "LS",
-  "PowerShell",
   "WebFetch",
   "WebSearch",
   "Task",

@@ -658,11 +658,15 @@ fi
 
 # Honest coverage: a tool herkos does not know, whose arguments carry none of
 # the names it reads, is UNCOVERED — it may touch anything, and herkos cannot
-# see what. Say so; never assume it is safe. Known tools that take no path stay
-# quiet, because an announcement on every call is how a guard gets muted. On
-# the heard channel the line is said ONCE per session and tool (D-008), for
-# the same noise reason; the stderr diagnostic stays on every call, and a
-# hook with no state dir keeps UNCOVERED on stderr only.
+# see what. Say so; never assume it is safe. Known tools whose arguments never
+# carry a path or command (a to-do list, a search) stay quiet, because an
+# announcement on every call is how a guard gets muted — but the path-bearing
+# tools (Bash, the file tools; see PATH_BEARING_TOOLS) are deliberately NOT
+# muted: for them a clean parse that yields nothing readable is schema drift,
+# and it gets the same UNCOVERED line. On the heard channel the line is said
+# ONCE per session and tool (D-008), for the same noise reason; the stderr
+# diagnostic stays on every call, and a hook with no state dir keeps UNCOVERED
+# on stderr only.
 if [ -z "$COMMAND_VALUES" ] && [ -z "$PATH_VALUES" ] && [ -n "$TOOL" ]; then
   case " $KNOWN_TOOLS " in
     *" $TOOL "*) ;;

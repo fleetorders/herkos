@@ -200,3 +200,17 @@ describe("claude-code wiring matches every tool", () => {
     }
   });
 });
+
+describe("the quiet list and the path-bearing list are disjoint", () => {
+  // The split is the whole fix: a tool muted in KNOWN_TOOLS while its
+  // arguments are the risk is silent non-enforcement on schema drift. This
+  // pins that no tool lands on both sides of the line.
+  it("no tool is both muted and path-bearing", async () => {
+    const { KNOWN_TOOLS, PATH_BEARING_TOOLS } = await import(
+      "../src/matchers.js"
+    );
+    for (const t of PATH_BEARING_TOOLS) {
+      expect(KNOWN_TOOLS).not.toContain(t);
+    }
+  });
+});

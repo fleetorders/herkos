@@ -195,3 +195,76 @@ describe("an UNCOVERED tool reaches the user once per session and tool (D-008)",
     expect(systemMessage(other.stdout)).toContain("mcp__other__thing");
   });
 });
+
+describe("a path-bearing tool that yields nothing is drift, not quiet", () => {
+  // The KNOWN_TOOLS mute used to silence Bash itself: a payload whose command
+  // key was renamed parsed cleanly, extracted nothing, and the one class of
+  // call that can trip the never-list went unchecked with no word. The split:
+  // tools whose arguments are paths or commands announce on the existing
+  // UNCOVERED path; tools whose arguments never are stay quiet.
+  const drift = (sid: string, tool: string) =>
+    withSession(
+      sid,
+      call(tool, { totally_unreadable_key: "cat ~/.ssh/id_ed25519" }),
+    );
+
+  it("announces UNCOVERED for a Bash call whose command key was renamed", () => {
+    const r = fire(drift("sess-drift-1", "Bash"), cc);
+    expect(r.exit).toBe(0);
+    expect(r.stderr).toContain("herkos UNCOVERED");
+    expect(r.stderr).toContain("Bash");
+    expect(systemMessage(r.stdout)).toContain("herkos UNCOVERED");
+    expect(systemMessage(r.stdout)).toContain("Bash");
+  });
+
+  it("once per session and tool on the heard channel — the diagnostic stays on stderr", () => {
+    fire(drift("sess-drift-2", "Bash"), cc);
+    const second = fire(drift("sess-drift-2", "Bash"), cc);
+    expect(second.exit).toBe(0);
+    expect(second.stderr).toContain("herkos UNCOVERED");
+    expect(second.stdout).toBe("");
+  });
+
+  it("stays quiet for a tool whose arguments never carry paths or commands", () => {
+    const r = fire(drift("sess-drift-3", "TodoWrite"), cc);
+    expect(r.exit).toBe(0);
+    expect(r.stderr).not.toContain("UNCOVERED");
+    expect(r.stdout).toBe("");
+  });
+
+  it("a call that passed NO arguments stays quiet — nothing passed, nothing to check", () => {
+    const r = fire(withSession("sess-drift-4", call("Bash", {})), cc);
+    expect(r.exit).toBe(0);
+    expect(r.stderr).not.toContain("UNCOVERED");
+  });
+
+  it("every path-bearing tool is in the announce class", () => {
+    for (const tool of [
+      "Bash",
+      "PowerShell",
+      "Read",
+      "Write",
+      "Edit",
+      "MultiEdit",
+      "NotebookEdit",
+      "NotebookRead",
+      "LS",
+    ]) {
+      const r = fire(drift("sess-drift-5", tool), cc);
+      expect(r.stderr).toContain("herkos UNCOVERED");
+      expect(r.stderr).toContain(tool);
+    }
+  });
+
+  it("Glob and Grep stay quiet — `pattern` is deliberately unread, so zero yield is their normal shape", () => {
+    for (const tool of ["Glob", "Grep", "WebFetch", "WebSearch"]) {
+      const r = fire(
+        withSession("sess-drift-6", call(tool, { pattern: "id_ed25519" })),
+        cc,
+      );
+      expect(r.exit).toBe(0);
+      expect(r.stderr).not.toContain("UNCOVERED");
+      expect(r.stdout).toBe("");
+    }
+  });
+});
