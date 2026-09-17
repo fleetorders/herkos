@@ -304,6 +304,13 @@ function rulesCmd(): void {
     if (r.message) {
       process.stdout.write(`      ${pc.dim(`message: ${r.message}`)}\n`);
     }
+    if (r.disposition === "open") {
+      // The honest limit of an open rule, said where a policy author reads:
+      // the notice reaches the user, never the model, and nothing is blocked.
+      process.stdout.write(
+        `      ${pc.dim("channel: the notice reaches the USER — a systemMessage on Claude Code, stderr elsewhere; the model never sees it, and the call is never blocked. An open rule is a word to the person, not a leash on the session.")}\n`,
+      );
+    }
     const targets = denyReadTargets(r);
     if (targets.length > 0) {
       process.stdout.write(

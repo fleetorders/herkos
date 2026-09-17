@@ -1,0 +1,17 @@
+---
+"herkos": minor
+---
+
+Hardening pass on the generated hook and the project layer: quieter where quiet was safe, louder where silence hid a gap. Regenerate with `herkos init` / `herkos project init` — every hook changes.
+
+- The KNOWN_TOOLS mute used to silence Bash, Read, Write, Edit, MultiEdit, NotebookEdit and every other tool whose arguments ARE the risk: a payload whose command or path key was renamed parsed cleanly, extracted nothing, and the never-list went unchecked for exactly the class of call that can trip it — with no word. The list is split. Tools whose every well-formed call carries a path or command herkos reads (`PATH_BEARING_TOOLS`: Bash, PowerShell, the file, notebook and directory tools) now announce `herkos UNCOVERED` when a call passed arguments and yielded nothing readable — schema drift, announced once per session and tool on the heard channel, D-008's dedup. Tools whose arguments never carry paths or commands (a to-do list, a search) stay quiet, and Glob/Grep stay quiet deliberately: `pattern` is unread by design, so a zero-yield call is their normal shape, not drift.
+
+- A string nested inside a wrapped command value — `command: [{text: "..."}]`, `command: {program: "sh", ...}` — was silently unchecked; the reader tagged strings by the nearest command-shaped key only, so the hook's own promise ("every string under a command-shaped key at any depth") did not survive a tool that array- or object-wraps its command. A string whose own key is not in a vocabulary now inherits the nearest command- or path-shaped key above it; a value with no vocabulary key anywhere above it (Write's `content`) stays skipped unread. The bypass corpus carries both wrap shapes.
+
+- `--selftest` printed one line and verified nothing. It now asserts every baked rule against its policy `match`/`notMatch` examples with the hook's own evaluator (the rule's exclusion applied first, exactly as `enforce` applies it) and exits 1 naming the drifted example; `herkos check` runs the branch and reports it. The baseline carries examples on all nine rules, so a default install asserts 26 examples out of the box.
+
+- A committed project hook's `LOG_FILE` compiled to empty with no way to set it — rotation, JSON lines and the harness attribution were dead code everywhere. `herkos.json` may now set `"logFile": "herkos-blocks.jsonl"`: refusals append one JSON line there, resolved at run time against the hook's own directory, so any clone or linked worktree logs beside its own hook rather than a path baked on one machine. `project init` says what to gitignore; `project check` reports the log and names a destination git does not ignore. Default stays off — a stranger's clone is never dirtied.
+
+- `herkos project init` no longer leaves a `.claude/settings.json.herkos-bak` behind when git tracks the settings file — history holds the prior state, and the backup was untracked residue dirtying every clone that ran init. Untracked settings files (and non-git directories) still get the one-time backup.
+
+- `herkos rules` now says, on every open rule, where the notice actually goes: a systemMessage to the USER on Claude Code (stderr elsewhere), never to the model, and the call is never blocked — an open rule is a word to the person, not a leash on the session. The `commandPrefixes` docs (schema and README) now state the compiled semantics plainly: a bounded token match, not an anchored prefix — `bin/deploy.sh` also catches `sh bin/deploy.sh` and `./bin/deploy.sh`, and `ls <token>` is not exempt.
