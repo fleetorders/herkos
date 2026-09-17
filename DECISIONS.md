@@ -117,3 +117,78 @@ across a line break — accepted, because tokens split that way are far more
 likely an attempted dodge than two coincidentally adjacent commands, and the
 missed-attack cost of line-by-line checking exceeds this contrived
 false-positive cost.
+
+### D-007 — Token boundaries are asymmetric, and a pattern can only match ASCII
+
+**Scope:** repo · **Decided:** 2026-09-17
+
+A prefix rule's baked pattern keeps the leading boundary `(^|[^[:alnum:]_.-])`
+but its trailing class is `([^[:alnum:]_-]|$)`: on the trailing side a dot or
+hyphen TERMINATES the forbidden spelling rather than continuing the token.
+And a pattern carrying non-ASCII text is warned against at validation: the
+hook's reader decodes payload text to ASCII, so such a pattern can never match.
+
+**Why:** an independent tier-1 review of a consumer repo's install measured
+that only whitespace- or EOL-terminated spellings were caught — `sh
+migrate-v2-reset.sh; echo done`, a pipe, a subshell-close, `bash -c` quoting
+all passed, because shell punctuation directly after the spelling did not
+match `[[:space:]]`. A shell would have run the forbidden program in every one
+of those positions, so every one of them is the spelling. Keeping the leading
+class wider (dot and hyphen continue a token there) preserves the
+shared-prefix false-positive protection (`migrate-v2` must not catch
+`migrate-v2.sh`); narrowing only the trailing side closes the dodge without
+reopening that false positive — `migrate-v2-reset.sh.bin` is blocked, which is
+the safe side for a never-list. The ASCII constraint is the matching half of
+the same fact: non-ASCII in a pattern is dead text the author cannot see
+failing (see D-008's W record for the value side).
+
+**Consequences:** a command whose forbidden spelling is genuinely continued by
+alphanumerics, `_` or `-` (`--force-with-lease` under a `--force` rule) still
+passes — that is a different token, and pinning it is the policy author's
+call, not the compiler's. A trailing `.` treats `name.sh.anything` as the
+forbidden `name.sh`; accepted as the safe side. Rules naming non-ASCII text
+are warned, not refused — a future reader that represents them would make the
+warning obsolete.
+
+### D-008 — Degradation is sticky and heard; the posture stays fail-open-loud
+
+**Scope:** repo · **Decided:** 2026-09-17
+
+Every degradation announcement (awk missing, unparseable payload, a rule's
+pattern grep cannot evaluate, a value decoded lossily) rides the same heard
+channel D-005 built for open-rule notices — the JSON `systemMessage` on
+Claude Code, stderr as collected elsewhere — and a degradation MARKS the
+session: later calls in the same session keep announcing it, keyed to the
+payload's `session_id`, until the session ends (markers expire after a week).
+An UNCOVERED tool reaches the user channel once per session and tool; its
+stderr diagnostic stays on every call. The catastrophic-class posture —
+`command-never` with hard-block disposition — STAYS fail-open-loud on
+unparseable payloads, per D-004: the tier-1 review argued for fail-closed
+(one weird payload re-issued versus a live install's data), and that argument
+is recorded here rather than decided away — flipping it is the maintainer's
+call, and the sticky announcements are what make fail-open honest enough to
+revisit deliberately instead of urgently.
+
+**Why:** D-005's own verification showed stderr at exit 0 reaches nobody, and
+the DEGRADED lines were never moved onto the new channel — so a degraded
+state was silent exactly when it mattered, once per call and then forgotten.
+A degradation the session sees once is a degradation the session forgets;
+stickiness makes the state follow the session instead of the call. UNCOVERED
+is bounded to once per session and tool because D-005's noise warning stands:
+a line on every call to a tool whose arguments herkos cannot read is how a
+guard gets muted. Lossy decoding announces a W record rather than failing the
+payload (E): the decoded text is still checked and every ASCII pattern sees
+the ASCII stretches intact, so turning a whole call's enforcement off over
+one non-ASCII character trades real coverage for ceremony.
+
+**Consequences:** session state lives beside the blocked-call log, so a hook
+that writes nothing (a committed project hook, or the user turning the log
+off) announces per call but cannot be sticky — stated, and the reason: a
+stranger-safe committed hook must not write machine-local state. On Claude
+Code the user sees degradations now; the model still does not (no
+non-blocking channel reaches it), as with notices. The marker file names the
+first reason recorded; a session that degrades for a second reason announces
+that too, on its own call. Fail-closed for catastrophic rules remains open to
+the maintainer: if it flips, D-004's session-bricking argument needs an
+answer first (a malformed-payload block loop with no user watching is a
+session wedged by its own guard).

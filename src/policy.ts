@@ -60,7 +60,13 @@ export interface Rule {
    * anchors at the end of the value.
    */
   notPaths?: string[];
-  /** Extended regexes matched against command text (fetched-exec / command-shaped rules). */
+  /**
+   * Extended regexes matched against command text (fetched-exec / command-shaped rules).
+   * Must be ASCII: the hook's payload reader decodes tool-call text to ASCII
+   * (non-ASCII becomes `?`, control characters become spaces — see extract.ts),
+   * so a pattern carrying anything else can never match what the hook checks.
+   * Validation warns when it sees one.
+   */
   commandPatterns?: string[];
   /**
    * Command prefixes as argument tokens, program first (`["git", "push"]`).
@@ -611,6 +617,23 @@ export function validatePolicy(policy: EffectivePolicy): ValidationResult {
       );
     }
     checkPrefixes(rid, rule.commandPrefixes, errors);
+    // What a pattern can match is bounded by what the hook's reader decodes:
+    // ASCII only (non-ASCII becomes "?", control characters become spaces —
+    // extract.ts). A non-ASCII pattern can never match; say so at the door
+    // rather than let the rule die silently at run time.
+    for (const [key, entries] of [
+      ["paths", rule.paths],
+      ["notPaths", rule.notPaths],
+      ["commandPatterns", rule.commandPatterns],
+    ] as const) {
+      for (const entry of entries ?? []) {
+        if (typeof entry === "string" && /[^\x00-\x7F]/.test(entry)) {
+          warnings.push(
+            `rule ${rid}: ${key} entry carries non-ASCII text — the hook decodes payload text to ASCII (non-ASCII becomes "?"), so this can never match; write the pattern in ASCII`,
+          );
+        }
+      }
+    }
     const beforeMatchers = errors.length;
     checkEntries(rid, "paths", rule.paths, errors);
     checkEntries(rid, "notPaths", rule.notPaths, errors);
@@ -808,9 +831,19 @@ export function denyReadTargets(rule: Rule): string[] {
  * or after a separator or a path slash — so `/usr/bin/x` counts) and ending at
  * a token boundary. Lets one declared prefix be enforced by the hook on every
  * harness and by a native prefix layer where one exists.
+ *
+ * The two boundaries are deliberately asymmetric (D-007). On the LEADING side
+ * `.`, `-`, `_` continue a token, so a name that merely shares a prefix
+ * (`migrate-v2` vs `migrate-v2.sh`) is not a match. On the TRAILING side only
+ * alphanumerics, `_` and `-` continue the token — every other character ends
+ * it, shell punctuation included: `spelling;`, `spelling|x`, `spelling)`,
+ * `spelling\` and `spelling.bin` all carry the forbidden spelling, because a
+ * shell would run it there. Making the trailing class as permissive as the
+ * leading one would let `spelling.bin` continue past the name and dodge the
+ * rule — punctuation terminates, only token characters continue.
  */
 export function prefixRegex(tokens: string[]): string {
-  return `(^|[^[:alnum:]_.-])${tokens.map(escapeERE).join("[[:space:]]+")}([[:space:]]|$)`;
+  return `(^|[^[:alnum:]_.-])${tokens.map(escapeERE).join("[[:space:]]+")}([^[:alnum:]_-]|$)`;
 }
 
 export function compile(policy: EffectivePolicy): CompiledPolicy {

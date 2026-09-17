@@ -710,3 +710,40 @@ describe("wiring stamp and session-start proof", () => {
     ).toBe(true);
   });
 });
+
+describe("what a pattern can match is bounded by what the reader decodes (D-007)", () => {
+  it("warns when a pattern carries non-ASCII — the hook decodes payload text to ASCII, so it can never match", () => {
+    const cfgDir = fs.mkdtempSync(path.join(os.tmpdir(), "herkos-ascii-"));
+    const prev = process.env.HERKOS_CONFIG;
+    process.env.HERKOS_CONFIG = cfgDir;
+    try {
+      fs.writeFileSync(
+        path.join(cfgDir, "policy.json"),
+        JSON.stringify({
+          rules: [
+            {
+              id: "non-ascii-rule",
+              class: "note",
+              description: "a pattern the reader can never match",
+              commandPatterns: ["réinitialise"],
+            },
+          ],
+        }),
+      );
+      const v = validatePolicy(loadEffectivePolicy());
+      expect(v.errors).toEqual([]);
+      expect(v.warnings.join("\n")).toContain(
+        "commandPatterns entry carries non-ASCII text",
+      );
+    } finally {
+      if (prev === undefined) delete process.env.HERKOS_CONFIG;
+      else process.env.HERKOS_CONFIG = prev;
+      fs.rmSync(cfgDir, { recursive: true, force: true });
+    }
+  });
+
+  it("stays quiet for an ASCII pattern, and for the curated baseline", () => {
+    const v = validatePolicy(loadEffectivePolicy());
+    expect(v.warnings.join("\n")).not.toContain("non-ASCII");
+  });
+});
