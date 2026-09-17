@@ -108,9 +108,9 @@ describe("an open rule surfaces a message and lets the call through", () => {
     );
     expect(r.exit).toBe(0);
     expect(r.stderr).toContain("prefer a pinned release");
-    expect((JSON.parse(r.stdout) as { systemMessage: string }).systemMessage).toContain(
-      "prefer a pinned release",
-    );
+    expect(
+      (JSON.parse(r.stdout) as { systemMessage: string }).systemMessage,
+    ).toContain("prefer a pinned release");
   });
 });
 
@@ -165,9 +165,9 @@ describe("both dispositions on the same call: the notice surfaces, then the bloc
     expect(r.stderr).toContain("herkos NOTICE (rule heads-up)");
     expect(r.stderr).toContain("BLOCKED (herkos) rule curl-pipe-shell");
     // The pending notice is flushed as a systemMessage before the block exits.
-    expect((JSON.parse(r.stdout) as { systemMessage: string }).systemMessage).toContain(
-      "herkos NOTICE (rule heads-up)",
-    );
+    expect(
+      (JSON.parse(r.stdout) as { systemMessage: string }).systemMessage,
+    ).toContain("herkos NOTICE (rule heads-up)");
   });
 });
 
