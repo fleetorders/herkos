@@ -95,6 +95,25 @@ function isOursProject(entry: SettingsHookEntry): boolean {
   return (entry.hooks ?? []).some((h) => (h.command ?? "").includes(HOOK_REL));
 }
 
+/**
+ * Does git track this file? Best effort: anything uncertain — no git, not a
+ * repo, a spawn failure — counts as UNtracked, so the pre-edit backup is
+ * still taken. Only a definitive "git holds the prior state" skips it.
+ */
+function gitTracks(file: string): boolean {
+  try {
+    return (
+      spawnSync("git", ["ls-files", "--error-unmatch", "--", file], {
+        cwd: path.dirname(file),
+        encoding: "utf8",
+        timeout: 5_000,
+      }).status === 0
+    );
+  } catch {
+    return false;
+  }
+}
+
 export interface ProjectWireResult {
   changed: string[];
   ruleCount: number;
@@ -105,7 +124,10 @@ export interface ProjectWireResult {
  * Compile the repo's `herkos.json` into its Claude Code project layer: write
  * the self-contained hook and register it on PreToolUse in the repo's
  * `.claude/settings.json`. Idempotent (the herkos entry is replaced, never
- * duplicated) and backs the settings file up once before the first edit.
+ * duplicated). Before the first edit of a settings file it takes a one-time
+ * backup — unless git already tracks the file, in which case the prior state
+ * lives in history and a backup file would only be untracked residue dirtying
+ * every clone that runs init.
  */
 export function wireProject(
   repoRoot: string,
@@ -129,7 +151,9 @@ export function wireProject(
       unknown
     >;
     const bak = `${sp}.herkos-bak`;
-    if (!fs.existsSync(bak)) {
+    // Only when git does not hold the prior state (see the doc above): a
+    // tracked settings file needs no second copy beside it.
+    if (!fs.existsSync(bak) && !gitTracks(sp)) {
       fs.copyFileSync(sp, bak);
       changed.push(bak);
       backedUp = true;

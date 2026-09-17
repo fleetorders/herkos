@@ -466,3 +466,34 @@ describe("a project policy can switch the blocked-call log on", () => {
     expect(v.detail).toContain("no block log");
   });
 });
+
+describe("the pre-edit backup only lands where git cannot restore", () => {
+  it("skips the backup when git tracks the settings file — no untracked residue", () => {
+    writeJson(".claude/settings.json", { model: "keep-me" });
+    spawnSync("git", ["init", "-q", repo]);
+    // Staged is enough: ls-files reads the index, so no commit (and no
+    // identity) is needed to prove git holds the prior state.
+    spawnSync("git", ["-C", repo, "add", ".claude/settings.json"]);
+    writeJson("herkos.json", PROJECT);
+    const r = wireProject(repo, compileProjectPolicy(repo).compiled);
+    expect(fs.existsSync(`${projectSettingsPath(repo)}.herkos-bak`)).toBe(
+      false,
+    );
+    expect(r.detail).not.toContain("herkos-bak");
+  });
+
+  it("still backs up an untracked settings file inside a git repo", () => {
+    spawnSync("git", ["init", "-q", repo]);
+    writeJson(".claude/settings.json", { model: "keep-me" });
+    writeJson("herkos.json", PROJECT);
+    wireProject(repo, compileProjectPolicy(repo).compiled);
+    expect(fs.existsSync(`${projectSettingsPath(repo)}.herkos-bak`)).toBe(true);
+  });
+
+  it("and outside any git repo — no git verdict means the backup is taken", () => {
+    writeJson(".claude/settings.json", { model: "keep-me" });
+    writeJson("herkos.json", PROJECT);
+    wireProject(repo, compileProjectPolicy(repo).compiled);
+    expect(fs.existsSync(`${projectSettingsPath(repo)}.herkos-bak`)).toBe(true);
+  });
+});

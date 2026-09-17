@@ -253,3 +253,25 @@ describe("coverage reports an open rule as advisory, never as a blocking layer",
     }
   });
 });
+
+describe("herkos rules says where an open rule's notice goes", () => {
+  it("prints the honest channel line for an open rule", async () => {
+    write(openPush);
+    const { __test } = await import("../src/cli.js");
+    const chunks: string[] = [];
+    const real = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((s: string) => {
+      chunks.push(String(s));
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      __test.rulesCmd();
+    } finally {
+      process.stdout.write = real;
+    }
+    const text = chunks.join("");
+    expect(text).toContain("ask-before-push");
+    expect(text).toContain("channel:");
+    expect(text).toContain("the model never sees it");
+  });
+});
