@@ -57,7 +57,11 @@ enforce depends on what the harness exposes:
   name — `file_path`, `path`, `paths`, `notebook_path`, `command`, `args` and
   their common spellings, at any depth. A tool it does not know whose arguments
   carry none of those names is announced as `herkos UNCOVERED` for that call,
-  never assumed safe. Search patterns, URLs and free text (an edit's new
+  never assumed safe — and so is a call from a path- or command-bearing tool
+  (Bash, Read, Write, the edit tools) that yields nothing readable: that is the
+  harness renaming its argument keys, not safety. Tools whose arguments are
+  never paths or commands (a to-do list, a search) stay quiet. Search
+  patterns, URLs and free text (an edit's new
   content, a prompt) are deliberately not read as paths: documentation that
   names a credential file is not an attempt to read it.
 - **Codex CLI — credential reads OS-enforced; fetched-code via a hook you trust
