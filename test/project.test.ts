@@ -7,8 +7,12 @@ import { call, fireHook, isolateConfig } from "./helpers.js";
 
 isolateConfig();
 
-const { loadProjectPolicy, validateProjectPolicy, projectPolicyPath } =
-  await import("../src/policy.js");
+const {
+  loadProjectPolicy,
+  validateProjectPolicy,
+  projectPolicyPath,
+  projectLogDestination,
+} = await import("../src/policy.js");
 const {
   compileProjectPolicy,
   wireProject,
@@ -364,5 +368,101 @@ describe("verifyProject — the CI drift check", () => {
     const v = verifyProject(repo);
     expect(v.ok).toBe(false);
     expect(v.state).toBe("stale");
+  });
+});
+
+describe("a project policy can switch the blocked-call log on", () => {
+  // LOG_FILE used to compile to empty with no way to set it — log_block,
+  // rotation and the harness attribution were dead code in every committed
+  // hook. Now herkos.json may name a repo-relative file, resolved at RUN time
+  // against the hook's own directory so any clone logs beside its own hook.
+  it("bakes a run-time-resolved repo-relative LOG_FILE, never an absolute path", () => {
+    writeJson("herkos.json", { ...PROJECT, logFile: "herkos-blocks.jsonl" });
+    const { compiled } = compileProjectPolicy(repo);
+    expect(compiled.logFile).toBe("herkos-blocks.jsonl");
+    wireProject(repo, compiled);
+    const hook = fs.readFileSync(projectHookPath(repo), "utf8");
+    expect(hook).toContain("LOG_FILE='herkos-blocks.jsonl'");
+    expect(hook).not.toMatch(/LOG_FILE='\/Users\/|LOG_FILE='\/home\//);
+    expect(hook).toContain("SELF_DIR=");
+  });
+
+  it("a block lands in the log beside the hook, attributed to the harness", () => {
+    writeJson("herkos.json", { ...PROJECT, logFile: "herkos-blocks.jsonl" });
+    wireProject(repo, compileProjectPolicy(repo).compiled);
+    const r = fireHook(
+      projectHookPath(repo),
+      call("Read", { file_path: "secrets/prod/db.json" }),
+      process.env,
+      ["--harness", "claude-code"],
+    );
+    expect(r.exit).toBe(2);
+    const log = path.join(repo, ".claude", "hooks", "herkos-blocks.jsonl");
+    expect(fs.existsSync(log)).toBe(true);
+    const entry = JSON.parse(
+      fs.readFileSync(log, "utf8").trim().split("\n")[0]!,
+    ) as { rule?: string; harness?: string };
+    expect(entry.rule).toBe("no-prod-secrets");
+    expect(entry.harness).toBe("claude-code");
+  });
+
+  it("no logFile means no log and no state dir — a stranger's clone stays clean", () => {
+    writeJson("herkos.json", PROJECT);
+    wireProject(repo, compileProjectPolicy(repo).compiled);
+    fireHook(
+      projectHookPath(repo),
+      call("Read", { file_path: "secrets/prod/x" }),
+    );
+    expect(fs.readdirSync(path.join(repo, ".claude", "hooks"))).toEqual([
+      "herkos-project.sh",
+    ]);
+  });
+
+  it("refuses an absolute, home-anchored or climbing logFile at validation", () => {
+    for (const bad of [
+      "/tmp/blocks.jsonl",
+      "../blocks.jsonl",
+      "~/blocks.jsonl",
+      "a/../b.jsonl",
+    ]) {
+      writeJson("herkos.json", { ...PROJECT, logFile: bad });
+      const eff = loadProjectPolicy(repo);
+      const v = validateProjectPolicy(eff);
+      expect(v.errors.some((e) => e.includes("logFile"))).toBe(true);
+      expect(projectLogDestination(eff.projectLogFile)).toBe("");
+    }
+  });
+
+  it("project check names a configured log git does not ignore", () => {
+    writeJson("herkos.json", { ...PROJECT, logFile: "herkos-blocks.jsonl" });
+    wireProject(repo, compileProjectPolicy(repo).compiled);
+    // Not a git repo: git's verdict is unavailable, and the check stays quiet.
+    const v0 = verifyProject(repo);
+    expect(v0.ok).toBe(true);
+    expect(v0.detail).toContain("block log at herkos-blocks.jsonl");
+    expect(v0.detail).not.toContain("NOT gitignored");
+
+    // A git repo without a gitignore entry: the first block would dirty the
+    // clone — the CI check says so.
+    spawnSync("git", ["init", "-q", repo]);
+    const v1 = verifyProject(repo);
+    expect(v1.ok).toBe(true);
+    expect(v1.detail).toContain("NOT gitignored");
+
+    // Ignored: the note is gone. (A raw line — .gitignore is not JSON.)
+    fs.writeFileSync(
+      path.join(repo, ".gitignore"),
+      ".claude/hooks/herkos-blocks.jsonl\n",
+    );
+    const v2 = verifyProject(repo);
+    expect(v2.detail).not.toContain("NOT gitignored");
+  });
+
+  it("project check says the log is off when the policy does not name one", () => {
+    writeJson("herkos.json", PROJECT);
+    wireProject(repo, compileProjectPolicy(repo).compiled);
+    const v = verifyProject(repo);
+    expect(v.ok).toBe(true);
+    expect(v.detail).toContain("no block log");
   });
 });

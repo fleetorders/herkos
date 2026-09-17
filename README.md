@@ -166,7 +166,9 @@ corpus carries this as a known-refusal case, so the behavior stays pinned and
 named, never silent.
 
 Your own rules can carry examples, which `validate` runs with the hook's own
-evaluator before anything is wired:
+evaluator before anything is wired — and the generated hook re-checks the same
+examples itself: `--selftest` (run by `herkos check`) fails if a baked rule no
+longer behaves as its examples say:
 
 ```json
 {
@@ -178,6 +180,14 @@ evaluator before anything is wired:
   "notMatch": ["git push origin main", "git push --force-with-lease"]
 }
 ```
+
+One semantics note on `commandPrefixes`, because the name under-sells what the
+hook does: each spelling compiles to a bounded **token** match, not an anchored
+prefix. It fires wherever the tokens stand as whole shell tokens in the line —
+`bin/deploy.sh` also catches `sh bin/deploy.sh` and `./bin/deploy.sh`, and
+`ls <token>` is not exempt. A harness-native prefix layer (Codex execpolicy)
+reads them as true program prefixes; the hook is deliberately wider so a
+called-by-path or wrapped invocation cannot dodge the rule.
 
 ## Finding what to add
 
@@ -299,6 +309,15 @@ Two properties keep it safe:
 **Claude Code only.** Codex resolves config from `~/.codex` with no repo-local
 layer, so a repo's Codex sessions rest on the machine policy, not the repo's own
 list — herkos says so rather than pretend a per-repo Codex guard exists.
+
+**Blocked-call log (optional).** A committed hook logs nothing by default — a
+stranger's clone must not be dirtied. `herkos.json` may set
+`"logFile": "herkos-blocks.jsonl"`: every refusal then appends one JSON line
+(time, harness, tool, rule — never the command text) to that file, resolved at
+run time against the hook's own directory, so any clone or linked worktree
+logs beside its own hook rather than a path baked on one machine. Gitignore
+the file (and the `sessions/` state dir beside it); `herkos project check`
+names it in CI when you haven't.
 
 ## Policy file
 

@@ -387,6 +387,8 @@ describe("degradation on an invalid regex baked past validation", () => {
         commandRegexes: ["foo("],
         denyRead: [],
         commandPrefixes: [],
+        match: [],
+        notMatch: [],
       },
       {
         id: "curl-pipe-shell",
@@ -399,6 +401,8 @@ describe("degradation on an invalid regex baked past validation", () => {
         commandRegexes: curlRule.commandPatterns ?? [],
         denyRead: [],
         commandPrefixes: [],
+        match: [],
+        notMatch: [],
       },
     ],
     userPolicyPath: "/tmp/herkos-test-policy.json",

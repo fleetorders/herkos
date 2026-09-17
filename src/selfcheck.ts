@@ -169,6 +169,24 @@ export function runSelfCheck(): {
       gotExit: syn.ok ? 0 : 1,
     },
   ];
+  // The hook's own advertised self-verify, made to assert: every baked rule
+  // checked against its policy examples by the hook itself. A drift between
+  // the baked patterns and the examples is caught here, in check, not
+  // silently at run time.
+  const st = spawnSync("sh", [script, "--selftest"], {
+    input: "",
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  const stOk = st.status === 0;
+  results.push({
+    name: stOk
+      ? `hook --selftest asserts the baked rules against their examples (${(st.stdout ?? "").trim()})`
+      : `hook --selftest FAILED — a baked rule drifted from its policy examples (${(st.stderr ?? "").trim().split("\n")[0]})`,
+    ok: stOk,
+    wantExit: 0,
+    gotExit: st.status ?? -1,
+  });
   for (const c of CASES) {
     const r = spawnSync("sh", [script], {
       input: c.payload,
