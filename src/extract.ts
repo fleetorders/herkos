@@ -27,7 +27,14 @@
  * inside it (a pipeline continued onto the next line), and a `^`-anchored
  * pattern anchors at the value's start, never at an embedded line start.
  * Array elements are read one by one,
- * nested arrays included. Every copy of a duplicated key is read — a
+ * nested arrays included. A string whose OWN key is not command- or
+ * path-shaped inherits the nearest vocabulary key above it — its container's
+ * owner, then each enclosing container's, outward up to tool_input — so a
+ * tool that array- or object-wraps its command (`command: [{text: "..."}]`,
+ * `command: {program: "sh", ...}`) does not hide the text: the promise is
+ * every string UNDER a command-shaped key, not merely directly beside one. A
+ * value whose whole chain carries no vocabulary key (Write's `content`) is
+ * skipped unread, as before. Every copy of a duplicated key is read — a
  * last-value-wins parser would see only the final copy. `\uXXXX` escapes are
  * decoded in keys and values (non-ASCII becomes "?"), so an escaped spelling of
  * a fragment is no way around it. Text that merely looks like JSON inside a
@@ -118,8 +125,14 @@ END {
       }
       else if (d >= 2 && inInput[d]) {
         k = (ctype[d] == "o") ? curkey[d] : ckey[d]
-        if (k in CK) tag = "C"
-        else if (k in PK) tag = "P"
+        j = d
+        while (1) {
+          if (k in CK) { tag = "C"; break }
+          if (k in PK) { tag = "P"; break }
+          if (j <= 2) break
+          k = ckey[j]
+          j--
+        }
       }
       readstr(tag == "" ? 0 : 2, tag)
       continue

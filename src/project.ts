@@ -29,10 +29,12 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import {
   compile,
   loadProjectPolicy,
   validateProjectPolicy,
+  projectLogDestination,
   type CompiledPolicy,
   type EffectivePolicy,
   type ValidationResult,
@@ -75,6 +77,10 @@ export function compileProjectPolicy(repoRoot: string): {
   const compiled = {
     ...compile(effective),
     userPolicyPath: "herkos.json",
+    // A committed hook logs only when herkos.json asks for it, and then to a
+    // run-time-resolved repo-relative file beside the hook (see
+    // ProjectPolicy.logFile) — never a baked absolute machine path.
+    logFile: projectLogDestination(effective.projectLogFile),
   };
   return { effective, compiled };
 }
@@ -150,7 +156,7 @@ export function wireProject(
   return {
     changed,
     ruleCount: compiled.ruleCount,
-    detail: `project hook generated (${compiled.ruleCount} rule(s), stamp ${stampOf(compiled)}) and registered on PreToolUse in ${path.relative(repoRoot, sp) || sp}.${backedUp ? ` A one-time pre-herkos backup of the previous settings sits at ${path.relative(repoRoot, `${sp}.herkos-bak`)} — untracked; delete it (or commit it) once the wiring looks right.` : ""} Commit .claude/ so every clone is guarded; it composes on top of each contributor's machine policy and can only add blocks.`,
+    detail: `project hook generated (${compiled.ruleCount} rule(s), stamp ${stampOf(compiled)}) and registered on PreToolUse in ${path.relative(repoRoot, sp) || sp}.${compiled.logFile ? ` Blocks are logged to ${compiled.logFile}, resolved beside the hook at run time — gitignore it and the sessions/ dir beside it, or the first refusal dirties the clone.` : ""}${backedUp ? ` A one-time pre-herkos backup of the previous settings sits at ${path.relative(repoRoot, `${sp}.herkos-bak`)} — untracked; delete it (or commit it) once the wiring looks right.` : ""} Commit .claude/ so every clone is guarded; it composes on top of each contributor's machine policy and can only add blocks.`,
   };
 }
 
@@ -238,8 +244,36 @@ export function verifyProject(repoRoot: string): ProjectVerifyResult {
   return {
     ok: true,
     state: "ok",
-    detail: `project hook matches herkos.json (${compiled.ruleCount} rule(s), stamp ${want})`,
+    detail: `project hook matches herkos.json (${compiled.ruleCount} rule(s), stamp ${want}); ${logNote(repoRoot, hookFile, compiled.logFile)}`,
   };
+}
+
+/**
+ * What the project check says about the blocked-call log: where a policy
+ * asked for one, or that none is configured. A configured destination git
+ * does not ignore gets named — the first block would dirty the tree, which
+ * belongs in a CI check's output, not in a contributor's surprise. git's
+ * verdict is best effort: no git, no repo, no verdict — silence, never error.
+ */
+function logNote(repoRoot: string, hookFile: string, logFile: string): string {
+  if (logFile === "")
+    return `no block log (herkos.json may set "logFile" to record refusals beside the hook)`;
+  let note = `block log at ${logFile}, resolved beside the hook at run time`;
+  const r = spawnSync(
+    "git",
+    [
+      "-C",
+      repoRoot,
+      "check-ignore",
+      "-q",
+      "--",
+      path.join(path.dirname(hookFile), logFile),
+    ],
+    { encoding: "utf8", timeout: 5_000 },
+  );
+  if (r.status === 1)
+    note += ` — NOT gitignored: the first block dirties the clone; add it (and the sessions/ dir) to .gitignore`;
+  return note;
 }
 
 /** Validate a repo's project policy (thin re-export path for the CLI). */
