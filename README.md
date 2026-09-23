@@ -110,7 +110,7 @@ It registers a second, tiny hook on session start that prints one line before
 the first tool call:
 
 ```
-herkos: enforced on Claude Code — 9 rule(s) (credential-read, fetched-exec) checked on every tool call, in every mode.
+herkos: enforced on Claude Code with 9 rule(s) (credential-read, fetched-exec) checked on every tool call; degrades loudly and fail-open when a payload cannot be read.
 herkos: NOT wired on Claude Code — the enforcement hook is missing at …; nothing on the never-list is blocked (credential-read, fetched-exec). Run 'herkos init'.
 herkos: enforced on Claude Code with 9 rule(s), BUT …/policy.json changed since 'herkos init' — the hook still carries the old rules. Run 'herkos init' to recompile.
 ```
