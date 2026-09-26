@@ -659,10 +659,16 @@ degrade() {
     {
       mkdir -p "$STATE_DIR" 2>/dev/null
       printf '%s\n' "$1" > "$STATE_DIR/degraded-$SESSION" 2>/dev/null
-      # Sessions are short-lived; one week of markers is plenty of memory.
-      find "$STATE_DIR" -type f -mtime +7 -delete 2>/dev/null
     } || true
+    expire_markers
   fi
+}
+
+# expire_markers — every path that writes a session marker calls this, so no
+# kind of marker outlives the week. Sessions are short-lived; one week of
+# markers is plenty of memory. Best effort: a failed sweep is never an error.
+expire_markers() {
+  find "$STATE_DIR" -type f -mtime +7 -delete 2>/dev/null || true
 }
 
 # flush_notices — put what herkos has to SAY on the harness's
@@ -711,15 +717,31 @@ if [ "\${1:-}" = "--selftest" ]; then
   SELFTEST_FAIL=0
   st_one() {
     # $1 label, $2 want (1 = must fire, 0 = must not), $3 example, $4 exclude, $5 patterns
-    if [ -n "$4" ] && printf '%s' "$3" | grep -Eq -e "$4" 2>/dev/null; then
-      if [ "$2" = "1" ]; then
-        printf 'herkos selftest FAIL: %s — the rule exclusion covers it\\n' "$1" >&2
+    # A pattern grep cannot evaluate fails the selftest outright: at run time
+    # enforce turns that rule OFF, so no example of it can be said to hold.
+    if [ -n "$4" ]; then
+      printf '%s' "$3" | grep -Eq -e "$4" 2>/dev/null
+      st_rc=$?
+      if [ "$st_rc" -ge 2 ]; then
+        printf 'herkos selftest FAIL: %s — the rule exclusion cannot be evaluated (grep exit %s)\\n' "$1" "$st_rc" >&2
         SELFTEST_FAIL=1
+        return 0
       fi
+      if [ "$st_rc" -eq 0 ]; then
+        if [ "$2" = "1" ]; then
+          printf 'herkos selftest FAIL: %s — the rule exclusion covers it\\n' "$1" >&2
+          SELFTEST_FAIL=1
+        fi
+        return 0
+      fi
+    fi
+    printf '%s' "$3" | grep -Eq -e "$5" 2>/dev/null
+    st_rc=$?
+    if [ "$st_rc" -ge 2 ]; then
+      printf 'herkos selftest FAIL: %s — the baked patterns cannot be evaluated (grep exit %s)\\n' "$1" "$st_rc" >&2
+      SELFTEST_FAIL=1
       return 0
     fi
-    printf '%s' "$3" | grep -Eq -e "$5"
-    st_rc=$?
     if { [ "$2" = "1" ] && [ "$st_rc" -ne 0 ]; } || { [ "$2" = "0" ] && [ "$st_rc" -eq 0 ]; }; then
       printf 'herkos selftest FAIL: %s — the baked patterns no longer behave as the example says\\n' "$1" >&2
       SELFTEST_FAIL=1
@@ -845,6 +867,7 @@ if [ -z "$COMMAND_VALUES" ] && [ -z "$PATH_VALUES" ] && [ -n "$TOOL" ]; then
             if [ ! -f "$STATE_DIR/uncovered-$SESSION-$ukey" ]; then
               NOTICES="\${NOTICES:+$NOTICES | }herkos UNCOVERED: $umsg"
               { mkdir -p "$STATE_DIR" 2>/dev/null; : > "$STATE_DIR/uncovered-$SESSION-$ukey" 2>/dev/null; } || true
+              expire_markers
             fi
           fi
           ;;

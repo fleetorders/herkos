@@ -54,7 +54,7 @@ const HOOK_REL = ".claude/hooks/herkos-project.sh";
 // deliberate exit-2 block from inside the hook still propagates; and
 // --harness names the caller, so an open rule's notice picks its channel and a
 // block is attributed in the blocked-call log.
-const HOOK_COMMAND = `test -r "$CLAUDE_PROJECT_DIR/${HOOK_REL}" || { printf 'herkos DEGRADED: project hook not readable — enforcement OFF for this call.\\n' >&2; exit 0; }; sh "$CLAUDE_PROJECT_DIR/${HOOK_REL}" --harness claude-code`;
+const HOOK_COMMAND = `{ test -f "$CLAUDE_PROJECT_DIR/${HOOK_REL}" && test -r "$CLAUDE_PROJECT_DIR/${HOOK_REL}"; } || { printf 'herkos DEGRADED: project hook not readable — enforcement OFF for this call.\\n' >&2; exit 0; }; sh "$CLAUDE_PROJECT_DIR/${HOOK_REL}" --harness claude-code`;
 
 export function projectHookPath(repoRoot: string): string {
   return path.join(repoRoot, HOOK_REL);

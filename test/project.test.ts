@@ -123,6 +123,28 @@ describe("wiring a repo's project policy", () => {
     expect(cmd).toContain("--harness claude-code");
   });
 
+  it("degrades open instead of hanging when the hook path is not a regular file", () => {
+    // `test -r` accepts a readable FIFO, and `sh` opening one waits forever:
+    // every tool call would hang instead of degrading open.
+    writeJson("herkos.json", PROJECT);
+    wireProject(repo, compileProjectPolicy(repo).compiled);
+    const cmd = (
+      read().hooks!.PreToolUse![0] as { hooks: { command: string }[] }
+    ).hooks[0]!.command;
+    const hookPath = projectHookPath(repo);
+    fs.rmSync(hookPath);
+    expect(spawnSync("mkfifo", [hookPath]).status).toBe(0);
+    const r = spawnSync("sh", ["-c", cmd], {
+      env: { ...process.env, CLAUDE_PROJECT_DIR: repo },
+      input: "",
+      encoding: "utf8",
+      timeout: 5_000,
+    });
+    expect(r.error).toBeUndefined(); // no timeout
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain("project hook not readable");
+  });
+
   it("bakes NO machine-specific path into the committed hook (public-repo safe)", () => {
     writeJson("herkos.json", PROJECT);
     const { compiled } = compileProjectPolicy(repo);

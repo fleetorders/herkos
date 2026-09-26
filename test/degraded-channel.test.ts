@@ -194,6 +194,23 @@ describe("an UNCOVERED tool reaches the user once per session and tool (D-008)",
     expect(other.exit).toBe(0);
     expect(systemMessage(other.stdout)).toContain("mcp__other__thing");
   });
+
+  it("writing an UNCOVERED marker expires week-old markers, without any degradation", () => {
+    // Expiry used to run only on the DEGRADED path, so a machine that only
+    // ever saw uncovered tools kept every marker forever.
+    fs.mkdirSync(stateDir, { recursive: true });
+    const stale = path.join(stateDir, "uncovered-old-session-mcp__x");
+    fs.writeFileSync(stale, "");
+    const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+    fs.utimesSync(stale, eightDaysAgo, eightDaysAgo);
+    const r = fire(uncovered("sess-7", "mcp__vault__fetch"), cc);
+    expect(r.stderr).toContain("herkos UNCOVERED");
+    expect(r.stderr).not.toContain("herkos DEGRADED");
+    expect(fs.existsSync(stale)).toBe(false);
+    expect(
+      fs.existsSync(path.join(stateDir, "uncovered-sess-7-mcp__vault__fetch")),
+    ).toBe(true);
+  });
 });
 
 describe("a path-bearing tool that yields nothing is drift, not quiet", () => {

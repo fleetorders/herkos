@@ -210,6 +210,17 @@ describe("policy validation", () => {
     ).toBe(true);
   });
 
+  it("skips the duplicate-spelling check, saying so, above its prefix limit", () => {
+    // The check runs one grep per prefix; an unbounded list would stall
+    // validate and project init, so a very large rule is told instead.
+    const many = Array.from({ length: 201 }, (_, i) => [`tool-${i}`, "run"]);
+    const v = validatePolicy(
+      policyWith({ commandPatterns: undefined, commandPrefixes: many }),
+    );
+    expect(v.warnings.some((w) => w.includes("skipped above 200"))).toBe(true);
+    expect(v.warnings.filter((w) => w.includes("subsumed"))).toEqual([]);
+  });
+
   it("does not warn on prefixes that merely share a first token", () => {
     const v = validatePolicy(
       policyWith({

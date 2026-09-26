@@ -474,6 +474,24 @@ function grepAccepts(pattern: string): { ok: boolean; detail: string } {
   };
 }
 
+/** Above this many prefixes in one rule, the duplicate-spelling check is skipped with a warning. */
+const MAX_SUBSUMPTION_PREFIXES = 200;
+
+/** Indexes of the `lines` that `re` matches, by `grep -E -n` in one process. */
+function grepMatchingLines(re: string, lines: string[]): number[] {
+  const r = spawnSync("grep", ["-E", "-n", "-e", re], {
+    input: lines.join("\n") + "\n",
+    encoding: "utf8",
+    timeout: 5_000,
+  });
+  if (r.status !== 0) return [];
+  return (r.stdout ?? "")
+    .split("\n")
+    .filter((l) => l !== "")
+    .map((l) => Number.parseInt(l.slice(0, l.indexOf(":")), 10) - 1)
+    .filter((n) => Number.isInteger(n) && n >= 0);
+}
+
 /** Does `re` match `text`, by the hook's own evaluator (`grep -E`)? */
 function grepMatches(re: string, text: string): boolean {
   return (
@@ -606,14 +624,23 @@ function warnSubsumedPrefixes(
   warnings: string[],
 ): void {
   const spell = (p: string[]): string => p.join(" ");
+  if (prefixes.length > MAX_SUBSUMPTION_PREFIXES) {
+    warnings.push(
+      `rule ${rid}: ${prefixes.length} commandPrefixes entries — the duplicate-spelling check runs one grep per entry and is skipped above ${MAX_SUBSUMPTION_PREFIXES}; split the rule to have it checked`,
+    );
+    return;
+  }
+  // One grep per prefix over every other spelling, one per line (-n names the
+  // lines that match), instead of one grep per ordered pair. Embedded newlines
+  // fold to spaces, as the hook folds them (D-006), so each probe is one line.
+  const probes = prefixes.map((p) => ` ${spell(p).replace(/[\r\n]+/g, " ")} `);
   for (let i = 0; i < prefixes.length; i++) {
-    for (let j = 0; j < prefixes.length; j++) {
+    const hits = grepMatchingLines(prefixRegex(prefixes[i]!), probes);
+    for (const j of hits) {
       if (i === j) continue;
-      if (grepMatches(prefixRegex(prefixes[i]!), ` ${spell(prefixes[j]!)} `)) {
-        warnings.push(
-          `rule ${rid}: commandPrefixes entry ${j + 1} (${JSON.stringify(spell(prefixes[j]!))}) is subsumed by entry ${i + 1} (${JSON.stringify(spell(prefixes[i]!))}) — every call it catches already fires this rule, so an open rule prints its notice twice; drop the narrower spelling`,
-        );
-      }
+      warnings.push(
+        `rule ${rid}: commandPrefixes entry ${j + 1} (${JSON.stringify(spell(prefixes[j]!))}) is subsumed by entry ${i + 1} (${JSON.stringify(spell(prefixes[i]!))}) — every call it catches already fires this rule, so an open rule prints its notice twice; drop the narrower spelling`,
+      );
     }
   }
 }

@@ -65,6 +65,35 @@ describe("--selftest asserts the baked rules against their policy examples", () 
     expect(r.stderr).toContain("ssh-private-keys notMatch example");
   });
 
+  it("FAILS when grep cannot evaluate a baked pattern — that rule is OFF at run time", () => {
+    // An unevaluable pattern used to read as "no match", so every notMatch
+    // example passed and the proof reported success for a rule enforce
+    // turns off.
+    const compiled = compile(loadEffectivePolicy());
+    const tampered = {
+      ...compiled,
+      rules: compiled.rules.map((r) =>
+        r.id === "ssh-private-keys" ? { ...r, pathRegex: "(" } : r,
+      ),
+    };
+    const r = selftest(hookFrom(tampered));
+    expect(r.exit).toBe(1);
+    expect(r.stderr).toContain("the baked patterns cannot be evaluated");
+  });
+
+  it("FAILS when grep cannot evaluate a rule's exclusion", () => {
+    const compiled = compile(loadEffectivePolicy());
+    const tampered = {
+      ...compiled,
+      rules: compiled.rules.map((r) =>
+        r.id === "dotenv-files" ? { ...r, notPathRegex: "(" } : r,
+      ),
+    };
+    const r = selftest(hookFrom(tampered));
+    expect(r.exit).toBe(1);
+    expect(r.stderr).toContain("the rule exclusion cannot be evaluated");
+  });
+
   it("applies the rule's exclusion first, exactly as enforce does", () => {
     // The dotenv rule's match example `cat ./.env` must fire; the same
     // fragment with the excluded template spelling must not — one rule
