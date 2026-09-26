@@ -43,6 +43,25 @@ export function hookPath(): string {
   return path.join(herkosDir(), "hook-claude-code.sh");
 }
 
+/**
+ * Every way a registered command can spell `abs`: the absolute path, and —
+ * for a path under the home directory — the `$HOME`, `${HOME}` and `~`
+ * forms. Early releases registered the hook as `$HOME/...`; matching only
+ * the absolute form left that entry in place on upgrade, so the hook was
+ * registered twice and ran twice on every call.
+ */
+export function pathSpellings(abs: string): string[] {
+  const home = os.homedir();
+  if (!home || !abs.startsWith(home + path.sep)) return [abs];
+  const rest = abs.slice(home.length);
+  return [abs, `$HOME${rest}`, `${"$"}{HOME}${rest}`, `~${rest}`];
+}
+
+/** Does a registered command run the script at `abs`, in any spelling? */
+export function commandRuns(command: string, abs: string): boolean {
+  return pathSpellings(abs).some((s) => command.includes(s));
+}
+
 /** The blocked-call log the hook appends to (see blocklog.ts). */
 export function blockLogPath(): string {
   return blockLogFile();
@@ -957,7 +976,7 @@ interface SettingsHookEntry {
 function isOurs(entry: SettingsHookEntry): boolean {
   return (entry.hooks ?? []).some((h) => {
     const c = h.command ?? "";
-    return c.includes(hookPath()) || c.includes(sessionStartHookPath());
+    return commandRuns(c, hookPath()) || commandRuns(c, sessionStartHookPath());
   });
 }
 
