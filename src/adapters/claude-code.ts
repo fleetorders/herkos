@@ -60,10 +60,14 @@ export function pathSpellings(abs: string): string[] {
 /**
  * Does a registered command run the script at `abs`, in any spelling? The
  * path must stand on its own: a neighbouring path character on either side
- * (`hook-claude-code.sh.backup`, `/x/home/...`) is someone else's file.
+ * (`hook-claude-code.sh~`, `hook-claude-code.sh.backup`, `/x/home/...`) is
+ * someone else's file. `~` counts as a path character because editors use it
+ * as the backup suffix — treating it as a boundary claimed
+ * `hook-claude-code.sh~`, and uninstall silently removed a registration that
+ * was never herkos's.
  */
 export function commandRuns(command: string, abs: string): boolean {
-  const pathChar = /[A-Za-z0-9._\-/]/;
+  const pathChar = /[A-Za-z0-9._\-/~]/;
   return pathSpellings(abs).some((s) => {
     for (let i = command.indexOf(s); i !== -1; i = command.indexOf(s, i + 1)) {
       const before = i > 0 ? command[i - 1]! : "";
