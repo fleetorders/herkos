@@ -224,4 +224,32 @@ describe("re-running init over an earlier install", () => {
     expect(left).toContain("sh my-own-check.sh");
     expect(left).not.toContain("hook-claude-code.sh");
   });
+
+  it.each([
+    [
+      "a root dotted key",
+      'permissions.herkos.description = "mine"\nmodel = "x"\n',
+    ],
+    [
+      "a key inside [permissions]",
+      '[permissions]\nherkos.description = "mine"\n',
+    ],
+  ])(
+    "Codex: refuses, writing nothing, when %s already defines the profile",
+    (_, toml) => {
+      const cfg = path.join(process.env.CODEX_HOME!, "config.toml");
+      fs.writeFileSync(cfg, toml);
+      expect(() => codexAdapter.wire(compile(loadEffectivePolicy()))).toThrow(
+        /already defines a 'herkos' permission profile/,
+      );
+      expect(fs.readFileSync(cfg, "utf8")).toBe(toml);
+    },
+  );
+
+  it("Codex: a look-alike key is not the profile", () => {
+    const cfg = path.join(process.env.CODEX_HOME!, "config.toml");
+    fs.writeFileSync(cfg, '[permissions.other]\nherkos_note = "x"\n');
+    codexAdapter.wire(compile(loadEffectivePolicy()));
+    expect(fs.readFileSync(cfg, "utf8")).toMatch(/^\[permissions\.herkos\]$/m);
+  });
 });

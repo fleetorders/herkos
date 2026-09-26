@@ -282,6 +282,30 @@ function stripBlocks(content: string): string {
   return kept.join("\n");
 }
 
+/**
+ * Does `content` define the herkos profile through a dotted key rather than a
+ * header — `permissions.herkos.x = ...` at the root, or `herkos = ...` /
+ * `herkos.x = ...` inside `[permissions]`? That also creates the table, so a
+ * header written after it is a second definition Codex refuses.
+ */
+function dottedOwnTable(content: string): boolean {
+  const rootKey = new RegExp(
+    `^\\s*(["']?)permissions\\1\\s*\\.\\s*(["']?)${PROFILE}\\2\\s*[.=]`,
+  );
+  const tableKey = new RegExp(`^\\s*(["']?)${PROFILE}\\1\\s*[.=]`);
+  let table = ""; // "" = the root section
+  for (const line of content.split("\n")) {
+    const header = /^\s*\[([^\]]*)\]/.exec(line);
+    if (header) {
+      table = header[1]!.replace(/[\s"']/g, "");
+      continue;
+    }
+    if (table === "" && rootKey.test(line)) return true;
+    if (table === "permissions" && tableKey.test(line)) return true;
+  }
+  return false;
+}
+
 /** How many times each herkos table header appears in `content`. */
 function duplicateOwnTables(content: string): string[] {
   const seen = new Map<string, number>();
@@ -464,6 +488,11 @@ export const codexAdapter: HarnessAdapter = {
     if (!conflict) next = upsertRootLine(next);
     // Codex refuses a file with a repeated table, and then no Codex session
     // starts. Never write one: refuse loudly and leave the file as it was.
+    if (dottedOwnTable(stripBlocks(content))) {
+      throw new WireRefusalError(
+        `${p} already defines a '${PROFILE}' permission profile with dotted keys — herkos will not overwrite it; remove or rename that profile, then re-run 'herkos init'`,
+      );
+    }
     const dupes = duplicateOwnTables(next);
     if (dupes.length > 0) {
       throw new WireRefusalError(
