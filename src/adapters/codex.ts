@@ -295,9 +295,10 @@ function duplicateOwnTables(content: string): string[] {
 }
 
 /**
- * Append the block at the end, always after a blank line: a tool that deletes
- * a table (header and everything up to the next header) must never be able to
- * run into the block and take its opening marker with it.
+ * Append the block at the end, always after a blank line: that is where a
+ * careful tool stops when it deletes the table above. One that deletes up to
+ * the next header can still take the opening marker; stripBlocks then finds
+ * the tables by their heading.
  */
 function upsertBlock(content: string, block: string): string {
   const c = stripBlocks(content).replace(/\n+$/, "");

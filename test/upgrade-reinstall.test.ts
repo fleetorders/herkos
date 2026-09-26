@@ -208,7 +208,7 @@ describe("re-running init over an earlier install", () => {
     expect(left).not.toContain("hook-claude-code.sh");
   });
 
-  it("Codex: writes its block after a blank line, so deleting the table above cannot reach it", () => {
+  it("Codex: always writes its block after a blank line, idempotently", () => {
     const cfg = path.join(process.env.CODEX_HOME!, "config.toml");
     fs.writeFileSync(cfg, '[projects."/work/a"]\ntrust_level = "trusted"\n');
     codexAdapter.wire(compile(loadEffectivePolicy()));
