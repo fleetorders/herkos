@@ -43,6 +43,37 @@ export function hookPath(): string {
   return path.join(herkosDir(), "hook-claude-code.sh");
 }
 
+/**
+ * Every way a registered command can spell `abs`: the absolute path, and —
+ * for a path under the home directory — the `$HOME`, `${HOME}` and `~`
+ * forms. Early releases registered the hook as `$HOME/...`; matching only
+ * the absolute form left that entry in place on upgrade, so the hook was
+ * registered twice and ran twice on every call.
+ */
+export function pathSpellings(abs: string): string[] {
+  const home = os.homedir();
+  if (!home || !abs.startsWith(home + path.sep)) return [abs];
+  const rest = abs.slice(home.length);
+  return [abs, `$HOME${rest}`, `${"$"}{HOME}${rest}`, `~${rest}`];
+}
+
+/**
+ * Does a registered command run the script at `abs`, in any spelling? The
+ * path must stand on its own: a neighbouring path character on either side
+ * (`hook-claude-code.sh.backup`, `/x/home/...`) is someone else's file.
+ */
+export function commandRuns(command: string, abs: string): boolean {
+  const pathChar = /[A-Za-z0-9._\-/]/;
+  return pathSpellings(abs).some((s) => {
+    for (let i = command.indexOf(s); i !== -1; i = command.indexOf(s, i + 1)) {
+      const before = i > 0 ? command[i - 1]! : "";
+      const after = command[i + s.length] ?? "";
+      if (!pathChar.test(before) && !pathChar.test(after)) return true;
+    }
+    return false;
+  });
+}
+
 /** The blocked-call log the hook appends to (see blocklog.ts). */
 export function blockLogPath(): string {
   return blockLogFile();
@@ -953,11 +984,45 @@ interface SettingsHookEntry {
   hooks?: { type?: string; command?: string }[];
 }
 
+/**
+ * `entries` with every command `owns` claims taken out. An entry keeps the
+ * commands that are not ours and is dropped only when nothing is left, so a
+ * user command that shares an entry with a herkos command survives wire and
+ * unwire. Entries of an unexpected shape pass through untouched.
+ */
+export function withoutOwned<T>(
+  entries: T[],
+  owns: (command: string) => boolean,
+): T[] {
+  const kept: T[] = [];
+  for (const e of entries) {
+    const hooks = (e as { hooks?: unknown } | null)?.hooks;
+    if (!Array.isArray(hooks)) {
+      kept.push(e);
+      continue;
+    }
+    const rest = hooks.filter(
+      (h) => !owns(String((h as { command?: unknown } | null)?.command ?? "")),
+    );
+    if (rest.length === hooks.length) kept.push(e);
+    else if (rest.length > 0) kept.push({ ...e, hooks: rest });
+  }
+  return kept;
+}
+
+/** Is this command one of the scripts herkos owns? */
+function ownsCommand(command: string): boolean {
+  return (
+    commandRuns(command, hookPath()) ||
+    commandRuns(command, sessionStartHookPath())
+  );
+}
+
 /** Does this settings entry run one of the scripts herkos owns? */
 function isOurs(entry: SettingsHookEntry): boolean {
   return (entry.hooks ?? []).some((h) => {
     const c = h.command ?? "";
-    return c.includes(hookPath()) || c.includes(sessionStartHookPath());
+    return commandRuns(c, hookPath()) || commandRuns(c, sessionStartHookPath());
   });
 }
 
@@ -1010,8 +1075,9 @@ export const claudeCodeAdapter: HarnessAdapter = {
       string,
       SettingsHookEntry[]
     >;
-    const pre: SettingsHookEntry[] = (hooks["PreToolUse"] ?? []).filter(
-      (e) => !isOurs(e),
+    const pre: SettingsHookEntry[] = withoutOwned(
+      hooks["PreToolUse"] ?? [],
+      ownsCommand,
     );
     const cmd = `sh "${hookPath()}" --harness claude-code`;
     // Every tool, including tool-server tools: the hook decides what to read by
@@ -1033,8 +1099,9 @@ export const claudeCodeAdapter: HarnessAdapter = {
       { mode: 0o755 },
     );
     changed.push(sessionStartHookPath());
-    const start: SettingsHookEntry[] = (hooks["SessionStart"] ?? []).filter(
-      (e) => !isOurs(e),
+    const start: SettingsHookEntry[] = withoutOwned(
+      hooks["SessionStart"] ?? [],
+      ownsCommand,
     );
     start.push({
       hooks: [{ type: "command", command: `sh "${sessionStartHookPath()}"` }],
@@ -1135,8 +1202,8 @@ export const claudeCodeAdapter: HarnessAdapter = {
       for (const event of ["PreToolUse", "SessionStart"]) {
         const entries = hooks[event];
         if (!entries) continue;
-        const kept = entries.filter((e) => !isOurs(e));
-        if (kept.length === entries.length) continue;
+        const kept = withoutOwned(entries, ownsCommand);
+        if (JSON.stringify(kept) === JSON.stringify(entries)) continue;
         // Leave no empty event key behind: unwire removes exactly what wire added.
         if (kept.length === 0) delete hooks[event];
         else hooks[event] = kept;

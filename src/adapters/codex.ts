@@ -32,6 +32,8 @@ import type {
   ProbeCommand,
 } from "./types.js";
 import {
+  commandRuns,
+  withoutOwned,
   generateHook,
   herkosDir,
   hookPath,
@@ -243,13 +245,64 @@ const BLOCK_RE = new RegExp(
   "gm",
 );
 
+/** A table header herkos owns: `[permissions.herkos]` or one of its subtables. */
+// Matched in the spelling herkos writes. Other tools find their own sections by
+// their headings the same way and leave the rest of the file alone; exotic but
+// equivalent spellings of this one are out of scope, and the duplicate check
+// below still refuses a file that would repeat the heading as herkos writes it.
+const OWN_TABLE_RE = new RegExp(`^\\s*\\[permissions\\.${PROFILE}(\\]|\\.)`);
+
+/**
+ * Every managed block, and every herkos table left without its opening
+ * marker. A tool that rewrites config.toml can drop comments and move tables
+ * (seen on a live install: the opening marker was gone and the block sat
+ * between other tables), and a marker-only search then appended a second
+ * [permissions.herkos] that Codex refused as a duplicate key. An orphaned
+ * table runs from its header to a blank line, the next table that is not
+ * ours, or a stray closing marker, which goes with it.
+ */
 function stripBlocks(content: string): string {
-  return content.replace(BLOCK_RE, "\n");
+  const lines = content.replace(BLOCK_RE, "\n").split("\n");
+  const kept: string[] = [];
+  let inOwn = false;
+  for (const line of lines) {
+    if (OWN_TABLE_RE.test(line)) {
+      inOwn = true;
+      continue;
+    }
+    if (line.trim() === END) {
+      inOwn = false;
+      continue;
+    }
+    // herkos writes its tables without blank lines, so a blank line or a
+    // table that is not ours ends an orphan; what follows is the user's.
+    if (inOwn && (line.trim() === "" || /^\s*\[/.test(line))) inOwn = false;
+    if (!inOwn) kept.push(line);
+  }
+  return kept.join("\n");
 }
 
+/** How many times each herkos table header appears in `content`. */
+function duplicateOwnTables(content: string): string[] {
+  const seen = new Map<string, number>();
+  for (const line of content.split("\n")) {
+    if (OWN_TABLE_RE.test(line)) {
+      const key = line.trim().replace(/\s+/g, "");
+      seen.set(key, (seen.get(key) ?? 0) + 1);
+    }
+  }
+  return [...seen].filter(([, n]) => n > 1).map(([k]) => k);
+}
+
+/**
+ * Append the block at the end, always after a blank line: that is where a
+ * careful tool stops when it deletes the table above. One that deletes up to
+ * the next header can still take the opening marker; stripBlocks then finds
+ * the tables by their heading.
+ */
 function upsertBlock(content: string, block: string): string {
-  const c = stripBlocks(content).replace(/\n{3,}$/, "\n\n");
-  return `${c}${c && !c.endsWith("\n") ? "\n" : ""}${block}\n`;
+  const c = stripBlocks(content).replace(/\n+$/, "");
+  return `${c}${c ? "\n\n" : ""}${block}\n`;
 }
 
 function removeRootLine(content: string): string {
@@ -342,10 +395,8 @@ function wireHook(doc: { hooks?: Record<string, unknown[]> }): void {
   // The harness name reaches the blocked-call log; the hook path stays the
   // ownership marker, so an entry written before the argument existed is still ours.
   const cmd = `sh "${hookPath()}" --harness codex`;
-  const isOurs = (e: unknown): boolean =>
-    JSON.stringify(e ?? "").includes(hookPath());
-  const pre = ((hooks["PreToolUse"] as unknown[]) ?? []).filter(
-    (e) => !isOurs(e),
+  const pre = withoutOwned((hooks["PreToolUse"] as unknown[]) ?? [], (c) =>
+    commandRuns(c, hookPath()),
   );
   pre.push({ matcher: "^Bash$", hooks: [{ type: "command", command: cmd }] });
   hooks["PreToolUse"] = pre;
@@ -416,6 +467,14 @@ export const codexAdapter: HarnessAdapter = {
     // Tables go at the end; the selecting root key goes above the first table.
     let next = upsertBlock(content, block);
     if (!conflict) next = upsertRootLine(next);
+    // Codex refuses a file with a repeated table, and then no Codex session
+    // starts. Never write one: refuse loudly and leave the file as it was.
+    const dupes = duplicateOwnTables(next);
+    if (dupes.length > 0) {
+      throw new WireRefusalError(
+        `${p} would hold ${dupes.join(", ")} more than once, which Codex refuses — nothing was written; remove the extra herkos tables by hand, then re-run 'herkos init'`,
+      );
+    }
     fs.writeFileSync(p, next);
     changed.push(p);
 
@@ -484,7 +543,11 @@ export const codexAdapter: HarnessAdapter = {
     const p = configPath();
     if (fs.existsSync(p)) {
       const c = fs.readFileSync(p, "utf8");
-      if (c.includes(BEGIN) || ROOT_RE.test(c)) {
+      if (
+        c.includes(BEGIN) ||
+        ROOT_RE.test(c) ||
+        c.split("\n").some((l) => OWN_TABLE_RE.test(l))
+      ) {
         fs.writeFileSync(p, removeRootLine(stripBlocks(c)));
         changed.push(p);
       }
@@ -505,10 +568,8 @@ export const codexAdapter: HarnessAdapter = {
       const hooks = doc.hooks ?? {};
       const pre = hooks["PreToolUse"];
       if (Array.isArray(pre)) {
-        const kept = pre.filter(
-          (e) => !JSON.stringify(e ?? "").includes(hookPath()),
-        );
-        if (kept.length !== pre.length) {
+        const kept = withoutOwned(pre, (c) => commandRuns(c, hookPath()));
+        if (JSON.stringify(kept) !== JSON.stringify(pre)) {
           // Leave no empty skeleton behind (the Claude adapter's rule): an
           // emptied event key goes, an emptied hooks wrapper goes, and a file
           // that held nothing but our registration — wire creates it when
@@ -570,7 +631,7 @@ export const codexAdapter: HarnessAdapter = {
     }
     const hookWired =
       fs.existsSync(hooksJsonPath()) &&
-      fs.readFileSync(hooksJsonPath(), "utf8").includes(hookPath());
+      commandRuns(fs.readFileSync(hooksJsonPath(), "utf8"), hookPath());
     // Prefix rules: live, refused by Codex at the last init, or missing/stale.
     const current = compile(loadEffectivePolicy());
     let prefixDetail = "";
@@ -632,7 +693,7 @@ export const codexAdapter: HarnessAdapter = {
     const hookLive =
       fs.existsSync(hookPath()) &&
       fs.existsSync(hooksJsonPath()) &&
-      fs.readFileSync(hooksJsonPath(), "utf8").includes(hookPath());
+      commandRuns(fs.readFileSync(hooksJsonPath(), "utf8"), hookPath());
     const prefixLive =
       fs.existsSync(codexRulesPath()) && !readCodexOwned().prefixRulesRejected;
     const effective = loadEffectivePolicy();
