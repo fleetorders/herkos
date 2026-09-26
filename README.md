@@ -15,7 +15,8 @@ _ἕρκος — the defensive rampart._
 agent must never do on your machine — read your credentials, pipe fetched code
 into a shell — and herkos compiles that one policy into every agent harness you
 have installed, and enforces it in every mode, including headless and
-bypass/skip-permissions runs.
+bypass/skip-permissions runs. Where herkos cannot read a call, it says so and lets
+that call through rather than blocking your session.
 
 ```sh
 npx herkos init      # detect installed harnesses, wire the policy into each
@@ -52,7 +53,8 @@ enforce depends on what the harness exposes:
 
 - **Claude Code — full enforcement.** herkos installs a small, self-contained (POSIX `sh`, `awk` and `grep`, nothing else)
   shell hook on `PreToolUse` that blocks both rule classes on every tool call, in
-  every mode (including headless / skip-permissions). The hook matches **every
+  every mode (including headless / skip-permissions); a payload it cannot read is
+  announced as degraded and allowed, never silently passed. The hook matches **every
   tool**, including tool-server (MCP) tools you add later, and reads arguments by
   name — `file_path`, `path`, `paths`, `notebook_path`, `command`, `args` and
   their common spellings, at any depth. A tool it does not know whose arguments
