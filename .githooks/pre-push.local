@@ -1,4 +1,14 @@
 #!/usr/bin/env sh
+
+# Machine-local companion checks, when this machine has any. `local/hooks/pre-push` is gitignored
+# and never tracked; it runs first, with this push's arguments and the ref list git hands the hook
+# on stdin, so a companion that screens what the push publishes sees exactly what git will send.
+# Nothing below reads stdin. A contributor without a companion pushes exactly as before.
+# (published-surface stub) — a maintainer's own publish screen belongs in that companion.
+if [ -x local/hooks/pre-push ]; then
+  local/hooks/pre-push "$@" || exit 1
+fi
+
 # Repo-owned pre-push checks (etymd never touches this file). The generated hook already runs
 # `npm run typecheck`; this adds the test suite, which is where every gate proves it fires.
 # Until now the suite ran only in CI, which is the slowest feedback loop there is: a failure
