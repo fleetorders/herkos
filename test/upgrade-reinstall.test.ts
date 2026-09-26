@@ -185,4 +185,43 @@ describe("re-running init over an earlier install", () => {
     expect(out.match(/^\[permissions\.herkos\]$/gm)).toHaveLength(1);
     expect(out).toContain('[projects."/work/c"]');
   });
+
+  const SHARED = {
+    matcher: "*",
+    hooks: [
+      { type: "command", command: OLD_CMD },
+      { type: "command", command: "sh my-own-check.sh" },
+    ],
+  };
+
+  it("Claude Code: keeps a user command that shares an entry with herkos, on wire and unwire", () => {
+    const sp = path.join(process.env.CLAUDE_CONFIG_DIR!, "settings.json");
+    fs.writeFileSync(sp, JSON.stringify({ hooks: { PreToolUse: [SHARED] } }));
+    const commands = (): string[] =>
+      (
+        JSON.parse(fs.readFileSync(sp, "utf8")) as {
+          hooks?: { PreToolUse?: { hooks: { command: string }[] }[] };
+        }
+      ).hooks?.PreToolUse?.flatMap((e) => e.hooks.map((h) => h.command)) ?? [];
+    claudeCodeAdapter.wire(compile(loadEffectivePolicy()));
+    expect(commands()).toContain("sh my-own-check.sh");
+    expect(
+      commands().filter((c) => c.includes("hook-claude-code.sh")),
+    ).toHaveLength(1);
+    claudeCodeAdapter.unwire();
+    expect(commands()).toEqual(["sh my-own-check.sh"]);
+  });
+
+  it("Codex: keeps a user command that shares an entry with herkos, on wire and unwire", () => {
+    const hp = path.join(process.env.CODEX_HOME!, "hooks.json");
+    fs.writeFileSync(hp, JSON.stringify({ hooks: { PreToolUse: [SHARED] } }));
+    codexAdapter.wire(compile(loadEffectivePolicy()));
+    const wired = fs.readFileSync(hp, "utf8");
+    expect(wired).toContain("sh my-own-check.sh");
+    expect(wired.match(/hook-claude-code\.sh/g)).toHaveLength(1);
+    codexAdapter.unwire();
+    const left = fs.readFileSync(hp, "utf8");
+    expect(left).toContain("sh my-own-check.sh");
+    expect(left).not.toContain("hook-claude-code.sh");
+  });
 });

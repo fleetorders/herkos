@@ -984,6 +984,40 @@ interface SettingsHookEntry {
   hooks?: { type?: string; command?: string }[];
 }
 
+/**
+ * `entries` with every command `owns` claims taken out. An entry keeps the
+ * commands that are not ours and is dropped only when nothing is left, so a
+ * user command that shares an entry with a herkos command survives wire and
+ * unwire. Entries of an unexpected shape pass through untouched.
+ */
+export function withoutOwned<T>(
+  entries: T[],
+  owns: (command: string) => boolean,
+): T[] {
+  const kept: T[] = [];
+  for (const e of entries) {
+    const hooks = (e as { hooks?: unknown } | null)?.hooks;
+    if (!Array.isArray(hooks)) {
+      kept.push(e);
+      continue;
+    }
+    const rest = hooks.filter(
+      (h) => !owns(String((h as { command?: unknown } | null)?.command ?? "")),
+    );
+    if (rest.length === hooks.length) kept.push(e);
+    else if (rest.length > 0) kept.push({ ...e, hooks: rest });
+  }
+  return kept;
+}
+
+/** Is this command one of the scripts herkos owns? */
+function ownsCommand(command: string): boolean {
+  return (
+    commandRuns(command, hookPath()) ||
+    commandRuns(command, sessionStartHookPath())
+  );
+}
+
 /** Does this settings entry run one of the scripts herkos owns? */
 function isOurs(entry: SettingsHookEntry): boolean {
   return (entry.hooks ?? []).some((h) => {
@@ -1041,8 +1075,9 @@ export const claudeCodeAdapter: HarnessAdapter = {
       string,
       SettingsHookEntry[]
     >;
-    const pre: SettingsHookEntry[] = (hooks["PreToolUse"] ?? []).filter(
-      (e) => !isOurs(e),
+    const pre: SettingsHookEntry[] = withoutOwned(
+      hooks["PreToolUse"] ?? [],
+      ownsCommand,
     );
     const cmd = `sh "${hookPath()}" --harness claude-code`;
     // Every tool, including tool-server tools: the hook decides what to read by
@@ -1064,8 +1099,9 @@ export const claudeCodeAdapter: HarnessAdapter = {
       { mode: 0o755 },
     );
     changed.push(sessionStartHookPath());
-    const start: SettingsHookEntry[] = (hooks["SessionStart"] ?? []).filter(
-      (e) => !isOurs(e),
+    const start: SettingsHookEntry[] = withoutOwned(
+      hooks["SessionStart"] ?? [],
+      ownsCommand,
     );
     start.push({
       hooks: [{ type: "command", command: `sh "${sessionStartHookPath()}"` }],
@@ -1166,8 +1202,8 @@ export const claudeCodeAdapter: HarnessAdapter = {
       for (const event of ["PreToolUse", "SessionStart"]) {
         const entries = hooks[event];
         if (!entries) continue;
-        const kept = entries.filter((e) => !isOurs(e));
-        if (kept.length === entries.length) continue;
+        const kept = withoutOwned(entries, ownsCommand);
+        if (JSON.stringify(kept) === JSON.stringify(entries)) continue;
         // Leave no empty event key behind: unwire removes exactly what wire added.
         if (kept.length === 0) delete hooks[event];
         else hooks[event] = kept;

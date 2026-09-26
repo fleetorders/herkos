@@ -33,6 +33,7 @@ import type {
 } from "./types.js";
 import {
   commandRuns,
+  withoutOwned,
   generateHook,
   herkosDir,
   hookPath,
@@ -389,10 +390,8 @@ function wireHook(doc: { hooks?: Record<string, unknown[]> }): void {
   // The harness name reaches the blocked-call log; the hook path stays the
   // ownership marker, so an entry written before the argument existed is still ours.
   const cmd = `sh "${hookPath()}" --harness codex`;
-  const isOurs = (e: unknown): boolean =>
-    commandRuns(JSON.stringify(e ?? ""), hookPath());
-  const pre = ((hooks["PreToolUse"] as unknown[]) ?? []).filter(
-    (e) => !isOurs(e),
+  const pre = withoutOwned((hooks["PreToolUse"] as unknown[]) ?? [], (c) =>
+    commandRuns(c, hookPath()),
   );
   pre.push({ matcher: "^Bash$", hooks: [{ type: "command", command: cmd }] });
   hooks["PreToolUse"] = pre;
@@ -564,10 +563,8 @@ export const codexAdapter: HarnessAdapter = {
       const hooks = doc.hooks ?? {};
       const pre = hooks["PreToolUse"];
       if (Array.isArray(pre)) {
-        const kept = pre.filter(
-          (e) => !commandRuns(JSON.stringify(e ?? ""), hookPath()),
-        );
-        if (kept.length !== pre.length) {
+        const kept = withoutOwned(pre, (c) => commandRuns(c, hookPath()));
+        if (JSON.stringify(kept) !== JSON.stringify(pre)) {
           // Leave no empty skeleton behind (the Claude adapter's rule): an
           // emptied event key goes, an emptied hooks wrapper goes, and a file
           // that held nothing but our registration — wire creates it when
