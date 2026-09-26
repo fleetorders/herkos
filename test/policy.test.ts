@@ -186,6 +186,54 @@ describe("policy validation", () => {
     expect(v.errors.every((e) => !/[\r\n]/.test(e))).toBe(true);
   });
 
+  it("warns when one prefix's generated pattern subsumes another's", () => {
+    // The natural trap: the same script spelled with and without "./", where
+    // the leading boundary class is satisfied by the slash — every call the
+    // second prefix catches already fires the first, printing the rule twice.
+    const v = validatePolicy(
+      policyWith({
+        commandPatterns: undefined,
+        commandPrefixes: [
+          ["scripts/deploy-lab.sh"],
+          ["./scripts/deploy-lab.sh"],
+        ],
+      }),
+    );
+    expect(v.errors).toEqual([]);
+    expect(
+      v.warnings.some(
+        (w) =>
+          w.includes("subsumed") &&
+          w.includes("./scripts/deploy-lab.sh") &&
+          w.includes("drop the narrower spelling"),
+      ),
+    ).toBe(true);
+  });
+
+  it("skips the duplicate-spelling check, saying so, above its prefix limit", () => {
+    // The check runs one grep per prefix; an unbounded list would stall
+    // validate and project init, so a very large rule is told instead.
+    const many = Array.from({ length: 201 }, (_, i) => [`tool-${i}`, "run"]);
+    const v = validatePolicy(
+      policyWith({ commandPatterns: undefined, commandPrefixes: many }),
+    );
+    expect(v.warnings.some((w) => w.includes("skipped above 200"))).toBe(true);
+    expect(v.warnings.filter((w) => w.includes("subsumed"))).toEqual([]);
+  });
+
+  it("does not warn on prefixes that merely share a first token", () => {
+    const v = validatePolicy(
+      policyWith({
+        commandPatterns: undefined,
+        commandPrefixes: [
+          ["git", "push"],
+          ["git", "status"],
+        ],
+      }),
+    );
+    expect(v.warnings.filter((w) => w.includes("subsumed"))).toEqual([]);
+  });
+
   it("rejects a duplicate id and a missing id", () => {
     const v = validatePolicy({
       rules: [
@@ -361,6 +409,8 @@ describe("degradation on an invalid regex baked past validation", () => {
         commandRegexes: ["foo("],
         denyRead: [],
         commandPrefixes: [],
+        match: [],
+        notMatch: [],
       },
       {
         id: "curl-pipe-shell",
@@ -373,6 +423,8 @@ describe("degradation on an invalid regex baked past validation", () => {
         commandRegexes: curlRule.commandPatterns ?? [],
         denyRead: [],
         commandPrefixes: [],
+        match: [],
+        notMatch: [],
       },
     ],
     userPolicyPath: "/tmp/herkos-test-policy.json",
@@ -719,5 +771,42 @@ describe("wiring stamp and session-start proof", () => {
     expect(
       syntaxCheck(generateSessionStartHook(compiled, "X", "/tmp/s")).ok,
     ).toBe(true);
+  });
+});
+
+describe("what a pattern can match is bounded by what the reader decodes (D-007)", () => {
+  it("warns when a pattern carries non-ASCII — the hook decodes payload text to ASCII, so it can never match", () => {
+    const cfgDir = fs.mkdtempSync(path.join(os.tmpdir(), "herkos-ascii-"));
+    const prev = process.env.HERKOS_CONFIG;
+    process.env.HERKOS_CONFIG = cfgDir;
+    try {
+      fs.writeFileSync(
+        path.join(cfgDir, "policy.json"),
+        JSON.stringify({
+          rules: [
+            {
+              id: "non-ascii-rule",
+              class: "note",
+              description: "a pattern the reader can never match",
+              commandPatterns: ["réinitialise"],
+            },
+          ],
+        }),
+      );
+      const v = validatePolicy(loadEffectivePolicy());
+      expect(v.errors).toEqual([]);
+      expect(v.warnings.join("\n")).toContain(
+        "commandPatterns entry carries non-ASCII text",
+      );
+    } finally {
+      if (prev === undefined) delete process.env.HERKOS_CONFIG;
+      else process.env.HERKOS_CONFIG = prev;
+      fs.rmSync(cfgDir, { recursive: true, force: true });
+    }
+  });
+
+  it("stays quiet for an ASCII pattern, and for the curated baseline", () => {
+    const v = validatePolicy(loadEffectivePolicy());
+    expect(v.warnings.join("\n")).not.toContain("non-ASCII");
   });
 });

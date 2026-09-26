@@ -10,23 +10,47 @@
  * One pass over the payload emits one record per line:
  *
  *   T<TAB>tool name   the top-level "tool_name"
+ *   S<TAB>session id  the top-level "session_id", when the harness sends one
  *   C<TAB>value       a string under a command-shaped key, at any depth of tool_input
  *   P<TAB>value       a string under a path-shaped key, at any depth of tool_input
  *   N<TAB>count       how many keys tool_input has directly
  *   E<TAB>reason      the payload could not be read (records before it still count)
+ *   W<TAB>note        a checked value decoded lossily (see below) — records stand
  *
  * A tool_input that is present but not an object (an array, a string, a bare
  * literal) emits E rather than nothing: the argument vocabularies are keyed by
  * NAME, so a container without names cannot be read — it is announced, never
  * assumed safe.
  *
- * A value holding newlines becomes several records with the same tag, so every
- * line of a multi-line command is checked. Array elements are read one by one,
- * nested arrays included. Every copy of a duplicated key is read — a
+ * A value's embedded newlines are folded to spaces, so one value is always ONE
+ * record, checked whole: a forbidden spelling cannot be split by a newline
+ * inside it (a pipeline continued onto the next line), and a `^`-anchored
+ * pattern anchors at the value's start, never at an embedded line start.
+ * Array elements are read one by one,
+ * nested arrays included. A string whose OWN key is not command- or
+ * path-shaped inherits the nearest vocabulary key above it — its container's
+ * owner, then each enclosing container's, outward up to tool_input — so a
+ * tool that array- or object-wraps its command (`command: [{text: "..."}]`,
+ * `command: {program: "sh", ...}`) does not hide the text: the promise is
+ * every string UNDER a command-shaped key, not merely directly beside one. A
+ * value whose whole chain carries no vocabulary key (Write's `content`) is
+ * skipped unread, as before. Every copy of a duplicated key is read — a
  * last-value-wins parser would see only the final copy. `\uXXXX` escapes are
  * decoded in keys and values (non-ASCII becomes "?"), so an escaped spelling of
  * a fragment is no way around it. Text that merely looks like JSON inside a
  * string is never taken for structure.
+ *
+ * The decoder is honest about what it cannot represent (D-008): a `\u` escape
+ * of a non-ASCII codepoint decodes to "?", a control codepoint (or a malformed
+ * `\u` sequence, or `\b`/`\f` — not shell whitespace) decodes to a space, and
+ * the payload then carries a W record — the hook announces it rather than let
+ * a rule silently not match text the decoder mangled. W rather than E on
+ * purpose: the decoded text is still checked, and everything an ASCII pattern
+ * can see is intact, so turning the whole call's enforcement off over one
+ * non-ASCII character would trade real coverage for ceremony. Raw non-ASCII
+ * bytes pass through unchanged — a real JSON encoder emits them raw, and only
+ * escaped spellings are mapped. Patterns must be ASCII (policy.ts warns at
+ * authoring); that is the note's other half.
  *
  * Built for large payloads: a value no rule reads (a megabyte of file content)
  * is skipped without being copied, the scan window grows over plain text and
@@ -44,6 +68,8 @@ BEGIN {
   HEX = "0123456789abcdef"
   openRec = 0
   badInput = 0
+  lossyRead = 0
+  sess = ""
 }
 { doc = doc $0 "\n" }
 END {
@@ -90,10 +116,23 @@ END {
       if (d == 1 && ctype[1] == "o" && curkey[1] == "tool_input") badInput = 1
       tag = ""
       if (d == 1 && ctype[1] == "o" && curkey[1] == "tool_name") { tag = "T"; sawTool = 1 }
+      else if (d == 1 && ctype[1] == "o" && curkey[1] == "session_id") {
+        sess = readstr(1, "")
+        if (failed) break
+        gsub(/\n/, " ", sess)
+        if (sess != "") printf "S\t%s\n", sess
+        continue
+      }
       else if (d >= 2 && inInput[d]) {
         k = (ctype[d] == "o") ? curkey[d] : ckey[d]
-        if (k in CK) tag = "C"
-        else if (k in PK) tag = "P"
+        j = d
+        while (1) {
+          if (k in CK) { tag = "C"; break }
+          if (k in PK) { tag = "P"; break }
+          if (j <= 2) break
+          k = ckey[j]
+          j--
+        }
       }
       readstr(tag == "" ? 0 : 2, tag)
       continue
@@ -105,6 +144,7 @@ END {
     }
     fail("unexpected character")
   }
+  if (!failed && lossyRead) printf "W\tlossy decode\n"
   if (!failed && d != 0) fail("truncated payload")
   if (!failed && !sawTool) fail("no tool_name")
   if (!failed && badInput) fail("tool_input is not an object")
@@ -117,10 +157,10 @@ function fail(m) {
 }
 function put(tag, piece) {
   if (!openRec) { printf "%s\t", tag; openRec = 1 }
-  gsub(/\n/, "\n" tag "\t", piece)
+  gsub(/\n/, " ", piece)
   printf "%s", piece
 }
-function readstr(mode, tag,    buf, w, win, piece, ch, e, h, code, j) {
+function readstr(mode, tag,    buf, w, win, piece, ch, e, h, code, bad, hx, j) {
   pos++
   buf = ""
   w = 64
@@ -153,14 +193,21 @@ function readstr(mode, tag,    buf, w, win, piece, ch, e, h, code, j) {
       pos += 4
       if (mode == 0) continue
       code = 0
-      for (j = 1; j <= 4; j++) code = code * 16 + index(HEX, substr(h, j, 1)) - 1
-      if (code >= 32 && code < 127) piece = sprintf("%c", code)
-      else if (code < 32) piece = " "
+      bad = 0
+      for (j = 1; j <= 4; j++) {
+        hx = index(HEX, substr(h, j, 1))
+        if (hx == 0) bad = 1
+        code = code * 16 + hx - 1
+      }
+      if (bad || code < 32) piece = " "
+      else if (code < 127) piece = sprintf("%c", code)
       else piece = "?"
+      if (mode == 2 && (bad || (code < 32 && code != 10) || code >= 127)) lossyRead = 1
     }
     else if (mode == 0) continue
     else if (e == "n") piece = "\n"
-    else if (e == "t" || e == "r" || e == "b" || e == "f") piece = " "
+    else if (e == "t" || e == "r") piece = " "
+    else if (e == "b" || e == "f") { piece = " "; if (mode == 2) lossyRead = 1 }
     else piece = e
     if (mode == 1) buf = buf piece
     else put(tag, piece)

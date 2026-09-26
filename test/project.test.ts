@@ -7,8 +7,12 @@ import { call, fireHook, isolateConfig } from "./helpers.js";
 
 isolateConfig();
 
-const { loadProjectPolicy, validateProjectPolicy, projectPolicyPath } =
-  await import("../src/policy.js");
+const {
+  loadProjectPolicy,
+  validateProjectPolicy,
+  projectPolicyPath,
+  projectLogDestination,
+} = await import("../src/policy.js");
 const {
   compileProjectPolicy,
   wireProject,
@@ -113,6 +117,32 @@ describe("wiring a repo's project policy", () => {
     expect(cmd).toContain(
       "$CLAUDE_PROJECT_DIR/.claude/hooks/herkos-project.sh",
     );
+    // The registration itself degrades open on a missing hook file and names
+    // the harness (notice channel + blocked-call attribution).
+    expect(cmd).toContain("test -r");
+    expect(cmd).toContain("--harness claude-code");
+  });
+
+  it("degrades open instead of hanging when the hook path is not a regular file", () => {
+    // `test -r` accepts a readable FIFO, and `sh` opening one waits forever:
+    // every tool call would hang instead of degrading open.
+    writeJson("herkos.json", PROJECT);
+    wireProject(repo, compileProjectPolicy(repo).compiled);
+    const cmd = (
+      read().hooks!.PreToolUse![0] as { hooks: { command: string }[] }
+    ).hooks[0]!.command;
+    const hookPath = projectHookPath(repo);
+    fs.rmSync(hookPath);
+    expect(spawnSync("mkfifo", [hookPath]).status).toBe(0);
+    const r = spawnSync("sh", ["-c", cmd], {
+      env: { ...process.env, CLAUDE_PROJECT_DIR: repo },
+      input: "",
+      encoding: "utf8",
+      timeout: 5_000,
+    });
+    expect(r.error).toBeUndefined(); // no timeout
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain("project hook not readable");
   });
 
   it("bakes NO machine-specific path into the committed hook (public-repo safe)", () => {
@@ -246,6 +276,82 @@ describe("wiring a repo's project policy", () => {
     const s = read() as Record<string, unknown>;
     expect(s.hooks).toBeUndefined();
   });
+
+  it("degrades OPEN, not closed, when the committed hook file is missing", () => {
+    // The registration runs `sh <hook>`; on a missing script sh exits 2, which
+    // the harness reads as "block" — every tool call in the repo refused. The
+    // registered command checks readability first and exits 0 instead, while a
+    // deliberate exit-2 block from inside the hook still propagates.
+    writeJson("herkos.json", PROJECT);
+    wireProject(repo, compileProjectPolicy(repo).compiled);
+    const pre = read().hooks!.PreToolUse!;
+    const cmd = (pre[0] as { hooks: { command: string }[] }).hooks[0]!.command;
+    fs.rmSync(projectHookPath(repo)); // the committed file is gone
+    const r = spawnSync("sh", ["-c", cmd], {
+      input: call("Read", { file_path: "secrets/prod/db.json" }),
+      encoding: "utf8",
+      timeout: 10_000,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: repo },
+    });
+    expect(r.status).toBe(0);
+    expect(r.stderr).toContain("DEGRADED");
+  });
+
+  it("runs the hook with --harness claude-code, so an open rule's notice reaches the user", () => {
+    writeJson("herkos.json", {
+      rules: [
+        {
+          id: "ask-first",
+          class: "note",
+          disposition: "open",
+          description: "touching the prod dir",
+          message: "Ask before touching prod.",
+          paths: ["prod/"],
+        },
+      ],
+    });
+    wireProject(repo, compileProjectPolicy(repo).compiled);
+    const pre = read().hooks!.PreToolUse!;
+    const cmd = (pre[0] as { hooks: { command: string }[] }).hooks[0]!.command;
+    const r = spawnSync("sh", ["-c", cmd], {
+      input: call("Read", { file_path: "prod/deploy.conf" }),
+      encoding: "utf8",
+      timeout: 10_000,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: repo },
+    });
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout ?? "") as { systemMessage?: string };
+    expect(out.systemMessage).toContain("Ask before touching prod.");
+  });
+
+  it("a regen over a hardened registration keeps the hardening (no silent clobber)", () => {
+    // A repo may commit a registration it tightened itself — fail-open on an
+    // unreadable hook, harness named — instead of the stock command. Every
+    // policy edit walks through `project init`, so a regen must land on a
+    // command at least as hardened, never silently back on the bare
+    // `sh <hook>` line.
+    const HARDENED =
+      'test -r "$CLAUDE_PROJECT_DIR/.claude/hooks/herkos-project.sh" || exit 0; sh "$CLAUDE_PROJECT_DIR/.claude/hooks/herkos-project.sh" --harness claude-code';
+    writeJson(".claude/settings.json", {
+      hooks: {
+        PreToolUse: [
+          { matcher: "*", hooks: [{ type: "command", command: HARDENED }] },
+        ],
+      },
+    });
+    writeJson("herkos.json", PROJECT);
+    const r = wireProject(repo, compileProjectPolicy(repo).compiled);
+    const pre = read().hooks!.PreToolUse!;
+    expect(pre).toHaveLength(1); // replaced, never duplicated
+    const cmd = (pre[0] as { hooks: { command: string }[] }).hooks[0]!.command;
+    // The equivalent hardened form: still fail-open when the hook is
+    // unreadable, still naming the harness (notice channel, block attribution).
+    expect(cmd).toContain("test -r");
+    expect(cmd).toContain("exit 0");
+    expect(cmd).toContain("--harness claude-code");
+    // The one-time settings backup is named in the output, not left silently.
+    expect(r.detail).toContain(".claude/settings.json.herkos-bak");
+  });
 });
 
 describe("verifyProject — the CI drift check", () => {
@@ -284,5 +390,132 @@ describe("verifyProject — the CI drift check", () => {
     const v = verifyProject(repo);
     expect(v.ok).toBe(false);
     expect(v.state).toBe("stale");
+  });
+});
+
+describe("a project policy can switch the blocked-call log on", () => {
+  // LOG_FILE used to compile to empty with no way to set it — log_block,
+  // rotation and the harness attribution were dead code in every committed
+  // hook. Now herkos.json may name a repo-relative file, resolved at RUN time
+  // against the hook's own directory so any clone logs beside its own hook.
+  it("bakes a run-time-resolved repo-relative LOG_FILE, never an absolute path", () => {
+    writeJson("herkos.json", { ...PROJECT, logFile: "herkos-blocks.jsonl" });
+    const { compiled } = compileProjectPolicy(repo);
+    expect(compiled.logFile).toBe("herkos-blocks.jsonl");
+    wireProject(repo, compiled);
+    const hook = fs.readFileSync(projectHookPath(repo), "utf8");
+    expect(hook).toContain("LOG_FILE='herkos-blocks.jsonl'");
+    expect(hook).not.toMatch(/LOG_FILE='\/Users\/|LOG_FILE='\/home\//);
+    expect(hook).toContain("SELF_DIR=");
+  });
+
+  it("a block lands in the log beside the hook, attributed to the harness", () => {
+    writeJson("herkos.json", { ...PROJECT, logFile: "herkos-blocks.jsonl" });
+    wireProject(repo, compileProjectPolicy(repo).compiled);
+    const r = fireHook(
+      projectHookPath(repo),
+      call("Read", { file_path: "secrets/prod/db.json" }),
+      process.env,
+      ["--harness", "claude-code"],
+    );
+    expect(r.exit).toBe(2);
+    const log = path.join(repo, ".claude", "hooks", "herkos-blocks.jsonl");
+    expect(fs.existsSync(log)).toBe(true);
+    const entry = JSON.parse(
+      fs.readFileSync(log, "utf8").trim().split("\n")[0]!,
+    ) as { rule?: string; harness?: string };
+    expect(entry.rule).toBe("no-prod-secrets");
+    expect(entry.harness).toBe("claude-code");
+  });
+
+  it("no logFile means no log and no state dir — a stranger's clone stays clean", () => {
+    writeJson("herkos.json", PROJECT);
+    wireProject(repo, compileProjectPolicy(repo).compiled);
+    fireHook(
+      projectHookPath(repo),
+      call("Read", { file_path: "secrets/prod/x" }),
+    );
+    expect(fs.readdirSync(path.join(repo, ".claude", "hooks"))).toEqual([
+      "herkos-project.sh",
+    ]);
+  });
+
+  it("refuses an absolute, home-anchored or climbing logFile at validation", () => {
+    for (const bad of [
+      "/tmp/blocks.jsonl",
+      "../blocks.jsonl",
+      "~/blocks.jsonl",
+      "a/../b.jsonl",
+    ]) {
+      writeJson("herkos.json", { ...PROJECT, logFile: bad });
+      const eff = loadProjectPolicy(repo);
+      const v = validateProjectPolicy(eff);
+      expect(v.errors.some((e) => e.includes("logFile"))).toBe(true);
+      expect(projectLogDestination(eff.projectLogFile)).toBe("");
+    }
+  });
+
+  it("project check names a configured log git does not ignore", () => {
+    writeJson("herkos.json", { ...PROJECT, logFile: "herkos-blocks.jsonl" });
+    wireProject(repo, compileProjectPolicy(repo).compiled);
+    // Not a git repo: git's verdict is unavailable, and the check stays quiet.
+    const v0 = verifyProject(repo);
+    expect(v0.ok).toBe(true);
+    expect(v0.detail).toContain("block log at herkos-blocks.jsonl");
+    expect(v0.detail).not.toContain("NOT gitignored");
+
+    // A git repo without a gitignore entry: the first block would dirty the
+    // clone — the CI check says so.
+    spawnSync("git", ["init", "-q", repo]);
+    const v1 = verifyProject(repo);
+    expect(v1.ok).toBe(true);
+    expect(v1.detail).toContain("NOT gitignored");
+
+    // Ignored: the note is gone. (A raw line — .gitignore is not JSON.)
+    fs.writeFileSync(
+      path.join(repo, ".gitignore"),
+      ".claude/hooks/herkos-blocks.jsonl\n",
+    );
+    const v2 = verifyProject(repo);
+    expect(v2.detail).not.toContain("NOT gitignored");
+  });
+
+  it("project check says the log is off when the policy does not name one", () => {
+    writeJson("herkos.json", PROJECT);
+    wireProject(repo, compileProjectPolicy(repo).compiled);
+    const v = verifyProject(repo);
+    expect(v.ok).toBe(true);
+    expect(v.detail).toContain("no block log");
+  });
+});
+
+describe("the pre-edit backup only lands where git cannot restore", () => {
+  it("skips the backup when git tracks the settings file — no untracked residue", () => {
+    writeJson(".claude/settings.json", { model: "keep-me" });
+    spawnSync("git", ["init", "-q", repo]);
+    // Staged is enough: ls-files reads the index, so no commit (and no
+    // identity) is needed to prove git holds the prior state.
+    spawnSync("git", ["-C", repo, "add", ".claude/settings.json"]);
+    writeJson("herkos.json", PROJECT);
+    const r = wireProject(repo, compileProjectPolicy(repo).compiled);
+    expect(fs.existsSync(`${projectSettingsPath(repo)}.herkos-bak`)).toBe(
+      false,
+    );
+    expect(r.detail).not.toContain("herkos-bak");
+  });
+
+  it("still backs up an untracked settings file inside a git repo", () => {
+    spawnSync("git", ["init", "-q", repo]);
+    writeJson(".claude/settings.json", { model: "keep-me" });
+    writeJson("herkos.json", PROJECT);
+    wireProject(repo, compileProjectPolicy(repo).compiled);
+    expect(fs.existsSync(`${projectSettingsPath(repo)}.herkos-bak`)).toBe(true);
+  });
+
+  it("and outside any git repo — no git verdict means the backup is taken", () => {
+    writeJson(".claude/settings.json", { model: "keep-me" });
+    writeJson("herkos.json", PROJECT);
+    wireProject(repo, compileProjectPolicy(repo).compiled);
+    expect(fs.existsSync(`${projectSettingsPath(repo)}.herkos-bak`)).toBe(true);
   });
 });

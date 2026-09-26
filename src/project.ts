@@ -29,10 +29,12 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import {
   compile,
   loadProjectPolicy,
   validateProjectPolicy,
+  projectLogDestination,
   type CompiledPolicy,
   type EffectivePolicy,
   type ValidationResult,
@@ -45,7 +47,14 @@ import {
 
 /** The repo-relative path Claude Code resolves for the committed hook. */
 const HOOK_REL = ".claude/hooks/herkos-project.sh";
-const HOOK_COMMAND = `sh "$CLAUDE_PROJECT_DIR/${HOOK_REL}"`;
+// Registered so the harness contract holds at the edges too: a missing or
+// unreadable hook file must degrade OPEN (plain `sh` on a missing script exits
+// 2, which the harness reads as "block" — every tool call in the repo refused,
+// the opposite of the hook body's own degrade-to-allow design), while a
+// deliberate exit-2 block from inside the hook still propagates; and
+// --harness names the caller, so an open rule's notice picks its channel and a
+// block is attributed in the blocked-call log.
+const HOOK_COMMAND = `{ test -f "$CLAUDE_PROJECT_DIR/${HOOK_REL}" && test -r "$CLAUDE_PROJECT_DIR/${HOOK_REL}"; } || { printf 'herkos DEGRADED: project hook not readable — enforcement OFF for this call.\\n' >&2; exit 0; }; sh "$CLAUDE_PROJECT_DIR/${HOOK_REL}" --harness claude-code`;
 
 export function projectHookPath(repoRoot: string): string {
   return path.join(repoRoot, HOOK_REL);
@@ -68,6 +77,10 @@ export function compileProjectPolicy(repoRoot: string): {
   const compiled = {
     ...compile(effective),
     userPolicyPath: "herkos.json",
+    // A committed hook logs only when herkos.json asks for it, and then to a
+    // run-time-resolved repo-relative file beside the hook (see
+    // ProjectPolicy.logFile) — never a baked absolute machine path.
+    logFile: projectLogDestination(effective.projectLogFile),
   };
   return { effective, compiled };
 }
@@ -82,6 +95,25 @@ function isOursProject(entry: SettingsHookEntry): boolean {
   return (entry.hooks ?? []).some((h) => (h.command ?? "").includes(HOOK_REL));
 }
 
+/**
+ * Does git track this file? Best effort: anything uncertain — no git, not a
+ * repo, a spawn failure — counts as UNtracked, so the pre-edit backup is
+ * still taken. Only a definitive "git holds the prior state" skips it.
+ */
+function gitTracks(file: string): boolean {
+  try {
+    return (
+      spawnSync("git", ["ls-files", "--error-unmatch", "--", file], {
+        cwd: path.dirname(file),
+        encoding: "utf8",
+        timeout: 5_000,
+      }).status === 0
+    );
+  } catch {
+    return false;
+  }
+}
+
 export interface ProjectWireResult {
   changed: string[];
   ruleCount: number;
@@ -92,7 +124,10 @@ export interface ProjectWireResult {
  * Compile the repo's `herkos.json` into its Claude Code project layer: write
  * the self-contained hook and register it on PreToolUse in the repo's
  * `.claude/settings.json`. Idempotent (the herkos entry is replaced, never
- * duplicated) and backs the settings file up once before the first edit.
+ * duplicated). Before the first edit of a settings file it takes a one-time
+ * backup — unless git already tracks the file, in which case the prior state
+ * lives in history and a backup file would only be untracked residue dirtying
+ * every clone that runs init.
  */
 export function wireProject(
   repoRoot: string,
@@ -109,15 +144,19 @@ export function wireProject(
   // 2. Register it on PreToolUse in the repo's project settings.
   const sp = projectSettingsPath(repoRoot);
   let settings: Record<string, unknown> = {};
+  let backedUp = false;
   if (fs.existsSync(sp)) {
     settings = JSON.parse(fs.readFileSync(sp, "utf8")) as Record<
       string,
       unknown
     >;
     const bak = `${sp}.herkos-bak`;
-    if (!fs.existsSync(bak)) {
+    // Only when git does not hold the prior state (see the doc above): a
+    // tracked settings file needs no second copy beside it.
+    if (!fs.existsSync(bak) && !gitTracks(sp)) {
       fs.copyFileSync(sp, bak);
       changed.push(bak);
+      backedUp = true;
     }
   }
   const rawHooks = settings["hooks"];
@@ -141,7 +180,7 @@ export function wireProject(
   return {
     changed,
     ruleCount: compiled.ruleCount,
-    detail: `project hook generated (${compiled.ruleCount} rule(s), stamp ${stampOf(compiled)}) and registered on PreToolUse in ${path.relative(repoRoot, sp) || sp}. Commit .claude/ so every clone is guarded; it composes on top of each contributor's machine policy and can only add blocks.`,
+    detail: `project hook generated (${compiled.ruleCount} rule(s), stamp ${stampOf(compiled)}) and registered on PreToolUse in ${path.relative(repoRoot, sp) || sp}.${compiled.logFile ? ` Blocks are logged to ${compiled.logFile}, resolved beside the hook at run time — gitignore it and the sessions/ dir beside it, or the first refusal dirties the clone.` : ""}${backedUp ? ` A one-time pre-herkos backup of the previous settings sits at ${path.relative(repoRoot, `${sp}.herkos-bak`)} — untracked; delete it (or commit it) once the wiring looks right.` : ""} Commit .claude/ so every clone is guarded; it composes on top of each contributor's machine policy and can only add blocks.`,
   };
 }
 
@@ -229,8 +268,36 @@ export function verifyProject(repoRoot: string): ProjectVerifyResult {
   return {
     ok: true,
     state: "ok",
-    detail: `project hook matches herkos.json (${compiled.ruleCount} rule(s), stamp ${want})`,
+    detail: `project hook matches herkos.json (${compiled.ruleCount} rule(s), stamp ${want}); ${logNote(repoRoot, hookFile, compiled.logFile)}`,
   };
+}
+
+/**
+ * What the project check says about the blocked-call log: where a policy
+ * asked for one, or that none is configured. A configured destination git
+ * does not ignore gets named — the first block would dirty the tree, which
+ * belongs in a CI check's output, not in a contributor's surprise. git's
+ * verdict is best effort: no git, no repo, no verdict — silence, never error.
+ */
+function logNote(repoRoot: string, hookFile: string, logFile: string): string {
+  if (logFile === "")
+    return `no block log (herkos.json may set "logFile" to record refusals beside the hook)`;
+  let note = `block log at ${logFile}, resolved beside the hook at run time`;
+  const r = spawnSync(
+    "git",
+    [
+      "-C",
+      repoRoot,
+      "check-ignore",
+      "-q",
+      "--",
+      path.join(path.dirname(hookFile), logFile),
+    ],
+    { encoding: "utf8", timeout: 5_000 },
+  );
+  if (r.status === 1)
+    note += ` — NOT gitignored: the first block dirties the clone; add it (and the sessions/ dir) to .gitignore`;
+  return note;
 }
 
 /** Validate a repo's project policy (thin re-export path for the CLI). */

@@ -57,7 +57,11 @@ enforce depends on what the harness exposes:
   name — `file_path`, `path`, `paths`, `notebook_path`, `command`, `args` and
   their common spellings, at any depth. A tool it does not know whose arguments
   carry none of those names is announced as `herkos UNCOVERED` for that call,
-  never assumed safe. Search patterns, URLs and free text (an edit's new
+  never assumed safe — and so is a call from a path- or command-bearing tool
+  (Bash, Read, Write, the edit tools) that yields nothing readable: that is the
+  harness renaming its argument keys, not safety. Tools whose arguments are
+  never paths or commands (a to-do list, a search) stay quiet. Search
+  patterns, URLs and free text (an edit's new
   content, a prompt) are deliberately not read as paths: documentation that
   names a credential file is not an attempt to read it.
 - **Codex CLI — credential reads OS-enforced; fetched-code via a hook you trust
@@ -162,7 +166,9 @@ corpus carries this as a known-refusal case, so the behavior stays pinned and
 named, never silent.
 
 Your own rules can carry examples, which `validate` runs with the hook's own
-evaluator before anything is wired:
+evaluator before anything is wired — and the generated hook re-checks the same
+examples itself: `--selftest` (run by `herkos check`) fails if a baked rule no
+longer behaves as its examples say:
 
 ```json
 {
@@ -174,6 +180,14 @@ evaluator before anything is wired:
   "notMatch": ["git push origin main", "git push --force-with-lease"]
 }
 ```
+
+One semantics note on `commandPrefixes`, because the name under-sells what the
+hook does: each spelling compiles to a bounded **token** match, not an anchored
+prefix. It fires wherever the tokens stand as whole shell tokens in the line —
+`bin/deploy.sh` also catches `sh bin/deploy.sh` and `./bin/deploy.sh`, and
+`ls <token>` is not exempt. A harness-native prefix layer (Codex execpolicy)
+reads them as true program prefixes; the hook is deliberately wider so a
+called-by-path or wrapped invocation cannot dodge the rule.
 
 ## Finding what to add
 
@@ -219,8 +233,11 @@ Some of the rules you actually want are not absolute "never"s but "not without
 asking" — never push shared history, never write to prod, never send data
 outward — where a hard block is too blunt. Give such a rule
 `"disposition": "open"` and a `message`: when it matches, herkos lets the call
-through and surfaces the message to the session as a notice, instead of blocking.
-An open rule grants nothing and gates nothing — it is advisory — so it is not a
+through and surfaces the message as a notice, instead of blocking. On Claude
+Code the notice is shown to you as a system message in the transcript; the
+agent itself does not see it — no non-blocking channel reaches the model — so
+an open rule guides you, it cannot nudge the agent. An open rule grants nothing
+and gates nothing — it is advisory — so it is not a
 permission or an allow-list. Rules also carry their own **class** label (any
 simple word) and an optional `message`, so a refusal names the real rule instead
 of forcing it into one of the two built-in classes.
@@ -300,6 +317,15 @@ nesting is what says "these tokens, in order, as one command".
 **Claude Code only.** Codex resolves config from `~/.codex` with no repo-local
 layer, so a repo's Codex sessions rest on the machine policy, not the repo's own
 list — herkos says so rather than pretend a per-repo Codex guard exists.
+
+**Blocked-call log (optional).** A committed hook logs nothing by default — a
+stranger's clone must not be dirtied. `herkos.json` may set
+`"logFile": "herkos-blocks.jsonl"`: every refusal then appends one JSON line
+(time, harness, tool, rule — never the command text) to that file, resolved at
+run time against the hook's own directory, so any clone or linked worktree
+logs beside its own hook rather than a path baked on one machine. Gitignore
+the file (and the `sessions/` state dir beside it); `herkos project check`
+names it in CI when you haven't.
 
 ## Policy file
 

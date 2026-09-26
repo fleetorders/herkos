@@ -9,6 +9,7 @@ export {
   policyFingerprint,
   loadProjectPolicy,
   validateProjectPolicy,
+  projectLogDestination,
   projectPolicyPath,
   PROJECT_POLICY_FILE,
   userPolicyPath,
