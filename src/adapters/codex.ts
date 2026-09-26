@@ -245,8 +245,10 @@ const BLOCK_RE = new RegExp(
 );
 
 /** A table header herkos owns: `[permissions.herkos]` or one of its subtables. */
+// TOML allows whitespace around the dots and quoted simple keys, so
+// `[permissions . herkos]` and `["permissions"."herkos"]` name the same table.
 const OWN_TABLE_RE = new RegExp(
-  `^\\s*\\[\\s*permissions\\.${PROFILE}\\s*(\\]|\\.)`,
+  `^\\s*\\[\\s*(["']?)permissions\\1\\s*\\.\\s*(["']?)${PROFILE}\\2\\s*(\\]|\\.)`,
 );
 
 /**
@@ -284,7 +286,8 @@ function duplicateOwnTables(content: string): string[] {
   const seen = new Map<string, number>();
   for (const line of content.split("\n")) {
     if (OWN_TABLE_RE.test(line)) {
-      const key = line.trim().replace(/\s+/g, "");
+      // One spelling per table: no whitespace, no quotes around simple keys.
+      const key = line.trim().replace(/\s+/g, "").replace(/["']/g, "");
       seen.set(key, (seen.get(key) ?? 0) + 1);
     }
   }

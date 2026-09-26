@@ -7,7 +7,7 @@ import { isolateConfig } from "./helpers.js";
 isolateConfig();
 
 const { compile, loadEffectivePolicy } = await import("../src/policy.js");
-const { claudeCodeAdapter, pathSpellings } = await import(
+const { claudeCodeAdapter, commandRuns, pathSpellings } = await import(
   "../src/adapters/claude-code.js"
 );
 const { codexAdapter } = await import("../src/adapters/codex.js");
@@ -153,5 +153,36 @@ describe("re-running init over an earlier install", () => {
     expect(out).not.toContain("herkos managed");
     expect(out).toContain('[projects."/work/b"]');
     expect(out).toContain("# my own note about the next project");
+  });
+
+  it("claims a command only when the path stands on its own", () => {
+    const abs = path.join(home, ".config", "herkos", "hook-claude-code.sh");
+    expect(commandRuns(OLD_CMD, abs)).toBe(true);
+    expect(commandRuns(`sh '${abs}' --harness codex`, abs)).toBe(true);
+    // Codex matches on the serialized entry, where quotes are escaped.
+    expect(commandRuns(JSON.stringify({ command: OLD_CMD }), abs)).toBe(true);
+    // Someone else's file that merely starts or ends with our path.
+    expect(commandRuns(`sh "${abs}.backup"`, abs)).toBe(false);
+    expect(commandRuns(`sh "/mirror${abs}"`, abs)).toBe(false);
+    expect(
+      commandRuns('sh "$HOME/.config/herkos/hook-claude-code.sh-old"', abs),
+    ).toBe(false);
+  });
+
+  it("Codex: recognises equivalent TOML spellings of its table headers", () => {
+    const cfg = path.join(process.env.CODEX_HOME!, "config.toml");
+    fs.writeFileSync(
+      cfg,
+      'model = "x"\n\n' +
+        '[permissions . herkos]\nextends = ":workspace"\n' +
+        '["permissions"."herkos".filesystem]\n"~/.ssh" = "deny"\n\n' +
+        '[projects."/work/c"]\ntrust_level = "trusted"\n',
+    );
+    codexAdapter.wire(compile(loadEffectivePolicy()));
+    const out = fs.readFileSync(cfg, "utf8");
+    expect(out).not.toContain("[permissions . herkos]");
+    expect(out).not.toContain('["permissions"."herkos".filesystem]');
+    expect(out.match(/^\[permissions\.herkos\]$/gm)).toHaveLength(1);
+    expect(out).toContain('[projects."/work/c"]');
   });
 });

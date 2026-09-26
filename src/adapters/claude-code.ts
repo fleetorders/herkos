@@ -57,9 +57,21 @@ export function pathSpellings(abs: string): string[] {
   return [abs, `$HOME${rest}`, `${"$"}{HOME}${rest}`, `~${rest}`];
 }
 
-/** Does a registered command run the script at `abs`, in any spelling? */
+/**
+ * Does a registered command run the script at `abs`, in any spelling? The
+ * path must stand on its own: a neighbouring path character on either side
+ * (`hook-claude-code.sh.backup`, `/x/home/...`) is someone else's file.
+ */
 export function commandRuns(command: string, abs: string): boolean {
-  return pathSpellings(abs).some((s) => command.includes(s));
+  const pathChar = /[A-Za-z0-9._\-/]/;
+  return pathSpellings(abs).some((s) => {
+    for (let i = command.indexOf(s); i !== -1; i = command.indexOf(s, i + 1)) {
+      const before = i > 0 ? command[i - 1]! : "";
+      const after = command[i + s.length] ?? "";
+      if (!pathChar.test(before) && !pathChar.test(after)) return true;
+    }
+    return false;
+  });
 }
 
 /** The blocked-call log the hook appends to (see blocklog.ts). */
