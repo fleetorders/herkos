@@ -798,8 +798,12 @@ command -v awk >/dev/null 2>&1 || {
 # under a command- or path-shaped key at any depth — directly, or nested inside
 # a wrapped value such as command: [{text: ...}] (a string inherits the nearest
 # vocabulary key above it) — the argument count, and E when the payload cannot
-# be read. awk and grep are POSIX; nothing else is needed.
-FIELDS=$(awk -v pkeys="$PATH_KEYS" -v ckeys="$COMMAND_KEYS" "$EXTRACT_AWK" 2>/dev/null)
+# be read. awk and grep are POSIX; nothing else is needed. The C locale makes
+# awk read bytes, not characters: the extractor scans in fixed-size windows, and
+# a window ending inside a multi-byte character (an em dash, an accented letter)
+# made a UTF-8-aware awk abort on the half character — enforcement off for a
+# call that was only ordinary text. Bytes pass through unchanged either way.
+FIELDS=$(LC_ALL=C awk -v pkeys="$PATH_KEYS" -v ckeys="$COMMAND_KEYS" "$EXTRACT_AWK" 2>/dev/null)
 AWK_RC=$?
 
 TAB=$(printf '\\t')

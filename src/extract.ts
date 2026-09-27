@@ -56,6 +56,10 @@
  * is skipped without being copied, the scan window grows over plain text and
  * shrinks around escapes, and a value that is read streams straight to output.
  *
+ * Run it under LC_ALL=C (the hook does): the scan windows are byte counts, and
+ * a UTF-8-aware awk given a window that ends inside a multi-byte character
+ * aborts on the half character instead of reading on.
+ *
  * Deliberately free of single quotes, so it embeds in the hook as one quoted
  * shell word.
  */

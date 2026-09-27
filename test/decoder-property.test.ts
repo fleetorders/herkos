@@ -24,7 +24,12 @@ function extract(payload: string): string[] {
       `ckeys=${COMMAND_KEYS.join(" ")}`,
       EXTRACT_AWK,
     ],
-    { input: payload, encoding: "utf8", timeout: 10_000 },
+    {
+      input: payload,
+      encoding: "utf8",
+      timeout: 10_000,
+      env: { ...process.env, LC_ALL: "C" },
+    },
   );
   if (r.status !== 0) throw new Error(`awk exited ${r.status}: ${r.stderr}`);
   return (r.stdout ?? "").split("\n").filter((l) => l !== "");
