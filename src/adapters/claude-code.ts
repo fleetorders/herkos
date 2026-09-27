@@ -57,25 +57,82 @@ export function pathSpellings(abs: string): string[] {
   return [abs, `$HOME${rest}`, `${"$"}{HOME}${rest}`, `~${rest}`];
 }
 
+/** The words a command may invoke the hook through and still have the PATH
+ * be the command: interpreters and the standard runner wrappers. A word
+ * outside this set that takes the path as an ARGUMENT (`cat`, `grep`, `ls`)
+ * names or reads the script without running it. */
+const RUNNER_WORDS = new Set([
+  "sh",
+  "bash",
+  "dash",
+  "zsh",
+  "env",
+  "exec",
+  "sudo",
+  "nohup",
+  "nice",
+  "stdbuf",
+  "timeout",
+]);
+
+/** A word that may sit between a runner and the script and still mean the
+ * runner invokes it: another runner, a flag, an env assignment (`env` and
+ * the `FOO=1 sh …` form), or a timeout's duration. */
+function isRunnerArgument(word: string): boolean {
+  return (
+    RUNNER_WORDS.has(word) ||
+    word.startsWith("-") ||
+    /^[A-Za-z_][A-Za-z0-9_]*=/.test(word) ||
+    /^\d+$/.test(word)
+  );
+}
+
 /**
  * Does a registered command run the script at `abs`, in any spelling? The
- * path must stand on its own: a neighbouring path character on either side
- * (`hook-claude-code.sh~`, `hook-claude-code.sh.backup`, `/x/home/...`) is
- * someone else's file. `~` counts as a path character because editors use it
- * as the backup suffix — treating it as a boundary claimed
- * `hook-claude-code.sh~`, and uninstall silently removed a registration that
- * was never herkos's.
+ * path must stand in command position — the first word of a segment, or the
+ * argument of a runner (`sh`, `env`, …) — and on its own: a neighbouring
+ * path character on either side (`hook-claude-code.sh~`,
+ * `hook-claude-code.sh.backup`, `/x/home/...`) is someone else's file. `~`
+ * counts as a path character because editors use it as the backup suffix —
+ * treating it as a boundary claimed `hook-claude-code.sh~`, and uninstall
+ * silently removed a registration that was never herkos's.
+ *
+ * Quotes are stripped first, backslash included (the `"…\"…"` of a
+ * serialized hooks file), so `"$HOME"/.config/…` and `${HOME}"/…` count as
+ * the spelling they expand to: an unmatched quote-split spelling is the
+ * double registration 0.4.1 fixed, in its quoted form. Command lists,
+ * pipelines and subshells split into segments checked independently, so
+ * `prepare && sh "$abs"` still runs the script. Braces are NOT separators —
+ * `${HOME}` is a parameter expansion a spelling itself contains.
+ *
+ * Exotic-but-genuine spellings (`echo "$abs" | xargs`) are knowingly NOT
+ * claimed: a miss costs a visible duplicate registration, while a false
+ * claim costs silent enforcement loss (`init` reporting the hook wired when
+ * a wrapper merely names it) or a user's entry removed on unwire —
+ * precision wins.
  */
 export function commandRuns(command: string, abs: string): boolean {
   const pathChar = /[A-Za-z0-9._\-/~]/;
-  return pathSpellings(abs).some((s) => {
-    for (let i = command.indexOf(s); i !== -1; i = command.indexOf(s, i + 1)) {
-      const before = i > 0 ? command[i - 1]! : "";
-      const after = command[i + s.length] ?? "";
-      if (!pathChar.test(before) && !pathChar.test(after)) return true;
-    }
-    return false;
-  });
+  // A JSON-escaped quote carries its backslash; both go together, or the
+  // bare path that remains never matches a spelling.
+  const flat = command.replace(/\\?['"]/g, "");
+  return pathSpellings(abs).some((s) =>
+    flat.split(/[\n;&|()]+/).some((segment) =>
+      segment
+        .split(/[ \t]+/)
+        .filter(Boolean)
+        .some((word, i, words) => {
+          const claims =
+            word === s ||
+            (word.startsWith(s) && !pathChar.test(word[s.length] ?? "")) ||
+            (word.endsWith(s) &&
+              !pathChar.test(word[word.length - s.length - 1] ?? ""));
+          if (!claims || i === 0) return claims;
+          if (!RUNNER_WORDS.has(words[0]!)) return false;
+          return words.slice(1, i).every(isRunnerArgument);
+        }),
+    ),
+  );
 }
 
 /** The blocked-call log the hook appends to (see blocklog.ts). */
@@ -559,7 +616,13 @@ fi
 # A relative LOG_FILE (a project policy names a repo-relative log) resolves
 # against THIS script's own directory at run time: any clone or linked
 # worktree logs beside its own hook, never at a path baked on one machine.
-SELF_DIR=\${0%/*}
+# A $0 with no slash (invoked by bare name through PATH) names no directory —
+# \${0%/*} would return the whole string and a relative LOG_FILE would resolve
+# against a nonsense path. . is the portable answer, same as dirname(1).
+case "$0" in
+  */*) SELF_DIR=\${0%/*} ;;
+  *) SELF_DIR=. ;;
+esac
 case "$LOG_FILE" in
   ""|/*) ;;
   *) LOG_FILE="$SELF_DIR/$LOG_FILE" ;;
@@ -570,7 +633,12 @@ case "$STATE_DIR" in
 esac
 
 block() {
-  flush_notices
+  # Exit 2's verified channel is stderr — a stdout systemMessage there is not
+  # parsed (measured on a live harness: it surfaces as raw JSON text beside
+  # the refusal, so the notice would read twice, once as soup). Notices ride
+  # stderr next to the block reason; the stdout JSON is for the non-blocking
+  # exits only (see flush_notices).
+  if [ -n "$NOTICES" ]; then printf '%s\\n' "$NOTICES" >&2; fi
   printf '%s\\n' "$1" >&2
   exit 2
 }
@@ -613,23 +681,24 @@ log_block() {
 # through. grep itself failing (bad regex, exit >= 2) degrades LOUDLY — on
 # EITHER pattern: the rule's own or its exclusion, since an unevaluable
 # exclusion would otherwise flip verdicts silently (exit 2 reads as "no
-# match", the rule fires as if the carve-out did not exist). That one rule is
-# off for this call and the session keeps working; every other rule stays
-# enforced. Never exit 2 because of a grep error, and never let one dump raw
-# grep text into the session.
+# match", the rule fires as if the carve-out did not exist). The exclusion is
+# evaluated only once the pattern has matched: this hook runs on every tool
+# call, one grep per rule per call is the floor, and on a call the pattern
+# does not match there is no verdict for a broken exclusion to flip. That one
+# rule is off for this call and the session keeps working; every other rule
+# stays enforced. Never exit 2 because of a grep error, and never let one
+# dump raw grep text into the session.
 enforce() {
   [ -n "$5" ] || return 0
-  if [ -n "$6" ]; then
+  printf '%s' "$4" | grep -Eq -e "$5" 2>/dev/null
+  rc=$?
+  if [ "$rc" -eq 0 ] && [ -n "$6" ]; then
     printf '%s' "$4" | grep -Eq -e "$6" 2>/dev/null
     xrc=$?
     if [ "$xrc" -ge 2 ]; then
       degrade "rule $1 exclude pattern could not be evaluated (grep exit $xrc) — that rule is OFF for this call. Run 'herkos validate'."
       return 0
     fi
-  fi
-  printf '%s' "$4" | grep -Eq -e "$5" 2>/dev/null
-  rc=$?
-  if [ "$rc" -eq 0 ] && [ -n "$6" ]; then
     oIFS=$IFS
     IFS=" $TAB"
     rest=""
@@ -651,17 +720,26 @@ enforce() {
 }
 
 # notice ID MESSAGE KIND SUBJECT REGEX EXCLUDE — an OPEN rule: surface the
-# message on a match and let the call THROUGH. Never blocks, never changes the
-# exit code, and a grep error just means no notice for this call. EXCLUDE
-# removes its benign spellings exactly as in enforce, so an open rule notices
-# the secret beside a template and stays quiet for templates alone. The line
-# goes to stderr as it is collected, and is recorded for flush_notices — see
-# there for why stderr alone is not the surface.
+# message on a match and let the call THROUGH. Never blocks, never changes
+# the exit code. EXCLUDE removes its benign spellings exactly as in enforce —
+# the same unevaluable-pattern guard, the same token loop — and a grep error
+# on EITHER pattern degrades loudly: an open rule that cannot be evaluated is
+# coverage silently off, no quieter than a block rule that cannot be (D-005
+# applies to notices too). As in enforce, the exclusion is evaluated only
+# once the pattern has matched. The line goes to stderr as it is collected,
+# and is recorded for flush_notices — see there for why stderr alone is not
+# the surface.
 notice() {
   [ -n "$5" ] || return 0
   printf '%s' "$4" | grep -Eq -e "$5" 2>/dev/null
   rc=$?
   if [ "$rc" -eq 0 ] && [ -n "$6" ]; then
+    printf '%s' "$4" | grep -Eq -e "$6" 2>/dev/null
+    xrc=$?
+    if [ "$xrc" -ge 2 ]; then
+      degrade "rule $1 exclude pattern could not be evaluated (grep exit $xrc) — no notice for this call. Run 'herkos validate'."
+      return 0
+    fi
     oIFS=$IFS
     IFS=" $TAB"
     rest=""
@@ -674,6 +752,9 @@ notice() {
   if [ "$rc" -eq 0 ]; then
     printf 'herkos NOTICE (rule %s): %s\\n' "$1" "$2" >&2
     NOTICES="\${NOTICES:+$NOTICES | }herkos NOTICE (rule $1): $2"
+  fi
+  if [ "$rc" -ge 2 ]; then
+    degrade "rule $1 pattern could not be evaluated (grep exit $rc) — no notice for this call. Run 'herkos validate'."
   fi
   return 0
 }
@@ -829,6 +910,13 @@ while IFS= read -r line; do
 done <<HERKOS_FIELDS
 $FIELDS
 HERKOS_FIELDS
+# The marker filenames below embed the session id, and the id is payload
+# input: one carrying "/" or ".." must not write outside the state dir.
+# Anything but flat filename characters folds to "_", the same fold the
+# uncovered marker already applies to tool names — stickiness survives and
+# the directory stays flat; a marker that cannot be written was always best
+# effort.
+SESSION=$(printf '%s' "$SESSION" | tr -c 'A-Za-z0-9._-' '_')
 if [ "$AWK_RC" -ne 0 ] && [ -z "$PARSE_ERROR" ]; then
   PARSE_ERROR="the extractor exited $AWK_RC"
 fi

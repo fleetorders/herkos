@@ -10,7 +10,9 @@ const { compile, loadEffectivePolicy } = await import("../src/policy.js");
 const { claudeCodeAdapter, commandRuns, pathSpellings } = await import(
   "../src/adapters/claude-code.js"
 );
-const { codexAdapter } = await import("../src/adapters/codex.js");
+const { codexAdapter, hookWiredInHooksJson } = await import(
+  "../src/adapters/codex.js"
+);
 
 /**
  * Re-running `init` over an install made by an earlier release, on a machine
@@ -252,8 +254,21 @@ describe("re-running init over an earlier install", () => {
     const abs = path.join(home, ".config", "herkos", "hook-claude-code.sh");
     expect(commandRuns(OLD_CMD, abs)).toBe(true);
     expect(commandRuns(`sh '${abs}' --harness codex`, abs)).toBe(true);
-    // Codex matches on the serialized entry, where quotes are escaped.
-    expect(commandRuns(JSON.stringify({ command: OLD_CMD }), abs)).toBe(true);
+    // Quote-split spellings expand to the same file: unmatched, init appended
+    // a second entry — the 0.4.1 double registration, in its quoted form.
+    expect(
+      commandRuns('sh "$HOME"/.config/herkos/hook-claude-code.sh', abs),
+    ).toBe(true);
+    expect(
+      commandRuns('sh "${HOME}"/.config/herkos/hook-claude-code.sh', abs),
+    ).toBe(true);
+    // A command that NAMES the path without running it is not a wiring.
+    expect(commandRuns(`cat ${abs}`, abs)).toBe(false);
+    expect(commandRuns(`grep -q x "${abs}" && echo found`, abs)).toBe(false);
+    // Knowingly unclaimed: a genuine invocation the runner set cannot see
+    // (the path feeds xargs, not a runner). A miss costs a duplicate
+    // registration; a false claim costs silent enforcement loss.
+    expect(commandRuns(`echo ${abs} | xargs`, abs)).toBe(false);
     // Someone else's file that merely starts or ends with our path.
     expect(commandRuns(`sh "${abs}.backup"`, abs)).toBe(false);
     expect(commandRuns(`sh "/mirror${abs}"`, abs)).toBe(false);
@@ -270,6 +285,36 @@ describe("re-running init over an earlier install", () => {
     expect(commandRuns("sh ~/.config/herkos/hook-claude-code.sh", abs)).toBe(
       true,
     );
+  });
+
+  it("Codex: the wired-check parses the hooks file instead of matching text in it", () => {
+    const abs = path.join(home, ".config", "herkos", "hook-claude-code.sh");
+    const file = (command: string): string =>
+      JSON.stringify(
+        {
+          hooks: {
+            PreToolUse: [
+              {
+                matcher: "^Bash$",
+                hooks: [{ type: "command", command }],
+              },
+            ],
+          },
+        },
+        null,
+        2,
+      );
+    // The registered command as the file serializes it: quotes escaped,
+    // multi-line. Still a wiring.
+    expect(hookWiredInHooksJson(file(`sh "${abs}" --harness codex`))).toBe(
+      true,
+    );
+    // A wrapper that merely NAMES the script is not a wiring — the raw-text
+    // match used to claim it, and status reported enforcement that was not
+    // there.
+    expect(hookWiredInHooksJson(file(`cat "${abs}" | wc -l`))).toBe(false);
+    // A file that is not JSON says "not wired", never "maybe".
+    expect(hookWiredInHooksJson("{not json")).toBe(false);
   });
 
   const SHARED = {

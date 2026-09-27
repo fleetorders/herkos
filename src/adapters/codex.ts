@@ -565,6 +565,37 @@ function wireHook(doc: { hooks?: Record<string, unknown[]> }): void {
   fs.writeFileSync(p, JSON.stringify(doc, null, 2) + "\n");
 }
 
+/**
+ * Does hooks.json content wire the herkos hook? The file is parsed and each
+ * command checked with commandRuns; JSON that will not parse says "not
+ * wired". Matching on the raw text instead claimed a path merely MENTIONED
+ * in it — a wrapper that cats the script read as a wiring, and status
+ * reported enforcement that was not there.
+ */
+export function hookWiredInHooksJson(text: string): boolean {
+  let doc: unknown;
+  try {
+    doc = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  const hooks = (doc as { hooks?: unknown } | null)?.hooks;
+  if (!hooks || typeof hooks !== "object") return false;
+  return Object.values(hooks as Record<string, unknown>).some((entries) => {
+    if (!Array.isArray(entries)) return false;
+    return entries.some((e) => {
+      const inner = (e as { hooks?: unknown } | null)?.hooks;
+      if (!Array.isArray(inner)) return false;
+      return inner.some((h) =>
+        commandRuns(
+          String((h as { command?: unknown } | null)?.command ?? ""),
+          hookPath(),
+        ),
+      );
+    });
+  });
+}
+
 export const codexAdapter: HarnessAdapter = {
   id: "codex",
   name: "Codex CLI",
@@ -789,7 +820,7 @@ export const codexAdapter: HarnessAdapter = {
     }
     const hookWired =
       fs.existsSync(hooksJsonPath()) &&
-      commandRuns(fs.readFileSync(hooksJsonPath(), "utf8"), hookPath());
+      hookWiredInHooksJson(fs.readFileSync(hooksJsonPath(), "utf8"));
     // Prefix rules: live, refused by Codex at the last init, or missing/stale.
     const current = compile(loadEffectivePolicy());
     let prefixDetail = "";
@@ -850,7 +881,7 @@ export const codexAdapter: HarnessAdapter = {
     const hookLive =
       fs.existsSync(hookPath()) &&
       fs.existsSync(hooksJsonPath()) &&
-      commandRuns(fs.readFileSync(hooksJsonPath(), "utf8"), hookPath());
+      hookWiredInHooksJson(fs.readFileSync(hooksJsonPath(), "utf8"));
     const prefixLive =
       fs.existsSync(codexRulesPath()) && !readCodexOwned().prefixRulesRejected;
     const effective = loadEffectivePolicy();
