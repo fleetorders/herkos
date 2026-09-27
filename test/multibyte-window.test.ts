@@ -1,11 +1,14 @@
-import { spawnSync } from "node:child_process";
 import { describe, it, expect } from "vitest";
-import { call, fireHook, isolateConfig, writeHook } from "./helpers.js";
+import {
+  call,
+  fireHook,
+  hookExtractor,
+  isolateConfig,
+  writeHook,
+} from "./helpers.js";
 
 isolateConfig();
 
-const { EXTRACT_AWK } = await import("../src/extract.js");
-const { PATH_KEYS, COMMAND_KEYS } = await import("../src/matchers.js");
 const { compile, loadEffectivePolicy } = await import("../src/policy.js");
 const { generateHook } = await import("../src/adapters/claude-code.js");
 
@@ -15,7 +18,9 @@ const { generateHook } = await import("../src/adapters/claude-code.js");
  * inside a multi-byte character aborted on the half character, and the hook
  * turned enforcement off for an ordinary command such as "a — b". The hook
  * runs awk under LC_ALL=C; these cases put the character across every window
- * boundary up to the third, with and without an escape shifting the windows.
+ * boundary up to the third, with and without an escape shifting the windows,
+ * through the hook's own extractor line in a UTF-8 locale — so on an awk that
+ * has the bug (macOS's) they fail if the hook stops setting the locale.
  */
 
 const script = generateHook({ ...compile(loadEffectivePolicy()), logFile: "" });
@@ -29,33 +34,9 @@ const utf8: NodeJS.ProcessEnv = {
 const CHARS = ["é", "—", "😀"]; // 2, 3 and 4 bytes
 const PREFIXES = ["", 'x\\"']; // the second resets the window after 3 bytes
 
-/** Run the extractor the way the hook does and return its record lines. */
-function extract(payload: string): string[] {
-  const r = spawnSync(
-    "awk",
-    [
-      "-v",
-      `pkeys=${PATH_KEYS.join(" ")}`,
-      "-v",
-      `ckeys=${COMMAND_KEYS.join(" ")}`,
-      EXTRACT_AWK,
-    ],
-    {
-      input: payload,
-      encoding: "utf8",
-      timeout: 10_000,
-      env: { ...utf8, LC_ALL: "C" },
-    },
-  );
-  if (r.status !== 0) throw new Error(`awk exited ${r.status}: ${r.stderr}`);
-  return (r.stdout ?? "").split("\n").filter((l) => l !== "");
-}
+const extract = hookExtractor(script, utf8);
 
 describe("a multi-byte character across a scan-window boundary", () => {
-  it("the hook runs the extractor under the C locale", () => {
-    expect(script).toMatch(/FIELDS=\$\(LC_ALL=C awk /);
-  });
-
   it("is read whole at every offset, and the value comes out byte for byte", () => {
     for (const prefix of PREFIXES) {
       for (const ch of CHARS) {

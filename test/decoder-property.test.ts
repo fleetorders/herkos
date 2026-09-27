@@ -1,8 +1,10 @@
-import { spawnSync } from "node:child_process";
 import { describe, it, expect } from "vitest";
+import { hookExtractor, isolateConfig } from "./helpers.js";
 
-const { EXTRACT_AWK } = await import("../src/extract.js");
-const { PATH_KEYS, COMMAND_KEYS } = await import("../src/matchers.js");
+isolateConfig();
+
+const { compile, loadEffectivePolicy } = await import("../src/policy.js");
+const { generateHook } = await import("../src/adapters/claude-code.js");
 
 /**
  * The property test D-008 asked for: whatever a real JSON encoder emits, the
@@ -13,27 +15,10 @@ const { PATH_KEYS, COMMAND_KEYS } = await import("../src/matchers.js");
  * (a real encoder emits them raw), and anything replaced is announced.
  */
 
-/** Run the extractor the way the hook does and return its record lines. */
-function extract(payload: string): string[] {
-  const r = spawnSync(
-    "awk",
-    [
-      "-v",
-      `pkeys=${PATH_KEYS.join(" ")}`,
-      "-v",
-      `ckeys=${COMMAND_KEYS.join(" ")}`,
-      EXTRACT_AWK,
-    ],
-    {
-      input: payload,
-      encoding: "utf8",
-      timeout: 10_000,
-      env: { ...process.env, LC_ALL: "C" },
-    },
-  );
-  if (r.status !== 0) throw new Error(`awk exited ${r.status}: ${r.stderr}`);
-  return (r.stdout ?? "").split("\n").filter((l) => l !== "");
-}
+/** Run the hook's own extractor line and return its record lines. */
+const extract = hookExtractor(
+  generateHook({ ...compile(loadEffectivePolicy()), logFile: "" }),
+);
 
 /** The single C record's value — the text rules are checked against. */
 const commandOf = (lines: string[]): string | null =>
