@@ -3,6 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { EXTRACT_AWK } from "../src/extract.js";
+
 /**
  * Point herkos at an empty config directory for the whole test process, so a
  * suite never reads THIS machine's user policy (a rule disabled there would
@@ -57,14 +59,23 @@ export function hookExtractor(
   script: string,
   env: NodeJS.ProcessEnv = process.env,
 ): (payload: string) => string[] {
-  const grab = (re: RegExp) => re.exec(script)?.[1];
-  const line = grab(/^FIELDS=\$\((.*)\)$/m);
-  const awk = grab(/^EXTRACT_AWK='([^']*)'$/m);
-  const pkeys = grab(/^PATH_KEYS='([^']*)'$/m);
-  const ckeys = grab(/^COMMAND_KEYS='([^']*)'$/m);
-  if (!line || !awk || !pkeys || !ckeys)
+  // Each piece is named in its failure, so a reformat of the hook breaks the
+  // tests with the exact line that changed, not one generic shape error.
+  const grab = (name: string, re: RegExp): string => {
+    const found = re.exec(script)?.[1];
+    if (found === undefined)
+      throw new Error(
+        `the hook no longer has the ${name} line this helper reads`,
+      );
+    return found;
+  };
+  const line = grab("FIELDS=$(…) extractor invocation", /^FIELDS=\$\((.*)\)$/m);
+  const awk = grab("EXTRACT_AWK assignment", /^EXTRACT_AWK='([^']*)'$/m);
+  const pkeys = grab("PATH_KEYS assignment", /^PATH_KEYS='([^']*)'$/m);
+  const ckeys = grab("COMMAND_KEYS assignment", /^COMMAND_KEYS='([^']*)'$/m);
+  if (awk !== EXTRACT_AWK)
     throw new Error(
-      "the hook no longer has the extractor shape this helper reads",
+      "the hook's embedded EXTRACT_AWK no longer equals src/extract.ts — the adapter template and the extractor drifted apart",
     );
   const command = line.replace(/ 2>\/dev\/null$/, "");
   return (payload) => {
