@@ -558,7 +558,8 @@ export function generateHook(policy: CompiledPolicy): string {
 
   // The selftest's assertions: each rule's baked patterns checked against its
   // own match / notMatch examples with the hook's own evaluator (grep -E),
-  // the rule's exclusion applied first exactly as enforce applies it. A
+  // the rule's exclusion applied by the same remaining_tokens helper enforce
+  // and notice use, so the proof cannot drift from the thing it proves. A
   // generator or compiler change that drifts a baked pattern from its
   // examples fails the wiring's own proof, not silently at run time.
   const selftestChecks: string[] = [];
@@ -606,6 +607,10 @@ TOOL=""
 NOTICES=""
 SESSION=""
 LOSSY=0
+# A literal tab, computed once where every later user finds it — the field
+# parser below and remaining_tokens split on it. Defined this early because
+# --selftest exits before the parser section yet its st_one shares the helper.
+TAB=$(printf '\\t')
 
 # The registered command names its harness, so a block is attributed to it.
 HARNESS=unknown
@@ -668,6 +673,24 @@ log_block() {
   } 2>/dev/null || true
 }
 
+# remaining_tokens SUBJECT EXCLUDE — the subject with every token EXCLUDE
+# matches removed, one grep per kept-or-dropped token. Tokens are split on
+# space and tab regardless of the caller's IFS; the callers run under set -f,
+# so no token is pathname-expanded. The ONE owner of the exclusion's
+# token-removal semantics: enforce, notice and the selftest's st_one all ask
+# it what is left, so none of the three can drift from the others (each once
+# carried its own copy of the loop, and st_one's copy had already drifted to
+# whole-subject semantics — the exact drift the selftest exists to catch).
+remaining_tokens() {
+  oIFS=$IFS
+  IFS=" $TAB"
+  for tok in $1; do
+    printf '%s' "$tok" | grep -Eq -e "$2" 2>/dev/null || printf '%s ' "$tok"
+  done
+  IFS=$oIFS
+  return 0
+}
+
 # enforce ID DESCRIPTION KIND SUBJECT REGEX EXCLUDE MESSAGE — grep the subject
 # against one compiled pattern. EXCLUDE (the rule's own benign-spelling
 # exclusions, "" for none) never mutes the rule for a whole subject that merely
@@ -675,9 +698,9 @@ log_block() {
 # matches an exclusion is removed from the subject and the pattern is re-tested
 # — the rule fires unless NOTHING that matches is left. "cat app/.env
 # app/.env.example" blocks on app/.env; a command naming only templates, or a
-# template beside unrelated files, stays allowed. (Tokens are split on space
-# and tab regardless of the caller's IFS; the callers run under set -f, so no
-# token is pathname-expanded.) Match → block, naming the rule. No match → fall
+# template beside unrelated files, stays allowed. (The removal is
+# remaining_tokens' to perform — the semantics live there, once.) Match →
+# block, naming the rule. No match → fall
 # through. grep itself failing (bad regex, exit >= 2) degrades LOUDLY — on
 # EITHER pattern: the rule's own or its exclusion, since an unevaluable
 # exclusion would otherwise flip verdicts silently (exit 2 reads as "no
@@ -699,13 +722,7 @@ enforce() {
       degrade "rule $1 exclude pattern could not be evaluated (grep exit $xrc) — that rule is OFF for this call. Run 'herkos validate'."
       return 0
     fi
-    oIFS=$IFS
-    IFS=" $TAB"
-    rest=""
-    for tok in $4; do
-      printf '%s' "$tok" | grep -Eq -e "$6" 2>/dev/null || rest="$rest$tok "
-    done
-    IFS=$oIFS
+    rest=$(remaining_tokens "$4" "$6")
     printf '%s' "$rest" | grep -Eq -e "$5" 2>/dev/null || return 0
   fi
   if [ "$rc" -eq 0 ]; then
@@ -722,13 +739,13 @@ enforce() {
 # notice ID MESSAGE KIND SUBJECT REGEX EXCLUDE — an OPEN rule: surface the
 # message on a match and let the call THROUGH. Never blocks, never changes
 # the exit code. EXCLUDE removes its benign spellings exactly as in enforce —
-# the same unevaluable-pattern guard, the same token loop — and a grep error
-# on EITHER pattern degrades loudly: an open rule that cannot be evaluated is
-# coverage silently off, no quieter than a block rule that cannot be (D-005
-# applies to notices too). As in enforce, the exclusion is evaluated only
-# once the pattern has matched. The line goes to stderr as it is collected,
-# and is recorded for flush_notices — see there for why stderr alone is not
-# the surface.
+# the same unevaluable-pattern guard, the same remaining_tokens helper — and
+# a grep error on EITHER pattern degrades loudly: an open rule that cannot be
+# evaluated is coverage silently off, no quieter than a block rule that
+# cannot be (D-005 applies to notices too). As in enforce, the exclusion is
+# evaluated only once the pattern has matched. The line goes to stderr as it
+# is collected, and is recorded for flush_notices — see there for why stderr
+# alone is not the surface.
 notice() {
   [ -n "$5" ] || return 0
   printf '%s' "$4" | grep -Eq -e "$5" 2>/dev/null
@@ -740,13 +757,7 @@ notice() {
       degrade "rule $1 exclude pattern could not be evaluated (grep exit $xrc) — no notice for this call. Run 'herkos validate'."
       return 0
     fi
-    oIFS=$IFS
-    IFS=" $TAB"
-    rest=""
-    for tok in $4; do
-      printf '%s' "$tok" | grep -Eq -e "$6" 2>/dev/null || rest="$rest$tok "
-    done
-    IFS=$oIFS
+    rest=$(remaining_tokens "$4" "$6")
     printf '%s' "$rest" | grep -Eq -e "$5" 2>/dev/null || return 0
   fi
   if [ "$rc" -eq 0 ]; then
@@ -765,9 +776,12 @@ notice() {
 # exactly as it did to open-rule notices, and a degradation nobody sees is
 # enforcement silently off. It also marks the session, D-008: a degradation
 # announced once and never again is a degradation the session forgets, so the
-# marker makes later calls in the same session keep announcing it. Best effort
-# at every step — a marker that cannot be written degrades to per-call
-# announcements, never to silence and never to blocking.
+# marker makes later calls in the same session keep announcing it. A policy
+# with no logFile bakes no STATE_DIR (a committed project hook must write
+# nothing machine-local), so its degradations write no marker: announced on
+# every affected call, but never carried to later ones — loud, just not
+# sticky. Best effort at every step — a marker that cannot be written
+# degrades to per-call announcements, never to silence and never to blocking.
 degrade() {
   printf 'herkos DEGRADED: %s\n' "$1" >&2
   NOTICES="\${NOTICES:+$NOTICES | }herkos DEGRADED: $1"
@@ -827,7 +841,8 @@ fi
 if [ "\${1:-}" = "--selftest" ]; then
   # The script runs and the rules are baked — and each rule's baked patterns
   # still behave as its policy examples say: every match example must fire
-  # (the rule's exclusion applied first, exactly as enforce applies it), every
+  # (the rule's exclusion applied by the shared remaining_tokens helper, the
+  # same one enforce and notice use), every
   # notMatch example must not. 'herkos check' runs this branch; a drift fails
   # HERE with the example named, not silently at run time.
   SELFTEST_FAIL=0
@@ -835,6 +850,12 @@ if [ "\${1:-}" = "--selftest" ]; then
     # $1 label, $2 want (1 = must fire, 0 = must not), $3 example, $4 exclude, $5 patterns
     # A pattern grep cannot evaluate fails the selftest outright: at run time
     # enforce turns that rule OFF, so no example of it can be said to hold.
+    # The exclusion is applied by the same remaining_tokens helper enforce
+    # and notice use — token removal, never whole-subject: an example naming
+    # a real target beside an excluded spelling still fires, exactly as at
+    # run time (a whole-subject test here once FAILED the mixed case enforce
+    # blocks correctly — the selftest drifting from the thing it proves).
+    st_subject=$3
     if [ -n "$4" ]; then
       printf '%s' "$3" | grep -Eq -e "$4" 2>/dev/null
       st_rc=$?
@@ -843,15 +864,9 @@ if [ "\${1:-}" = "--selftest" ]; then
         SELFTEST_FAIL=1
         return 0
       fi
-      if [ "$st_rc" -eq 0 ]; then
-        if [ "$2" = "1" ]; then
-          printf 'herkos selftest FAIL: %s — the rule exclusion covers it\\n' "$1" >&2
-          SELFTEST_FAIL=1
-        fi
-        return 0
-      fi
+      st_subject=$(remaining_tokens "$3" "$4")
     fi
-    printf '%s' "$3" | grep -Eq -e "$5" 2>/dev/null
+    printf '%s' "$st_subject" | grep -Eq -e "$5" 2>/dev/null
     st_rc=$?
     if [ "$st_rc" -ge 2 ]; then
       printf 'herkos selftest FAIL: %s — the baked patterns cannot be evaluated (grep exit %s)\\n' "$1" "$st_rc" >&2
@@ -887,7 +902,6 @@ command -v awk >/dev/null 2>&1 || {
 FIELDS=$(awk -v pkeys="$PATH_KEYS" -v ckeys="$COMMAND_KEYS" "$EXTRACT_AWK" 2>/dev/null)
 AWK_RC=$?
 
-TAB=$(printf '\\t')
 NL='
 '
 TOOL=""
