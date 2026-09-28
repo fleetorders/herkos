@@ -260,7 +260,15 @@ export const BASELINE: Rule[] = [
     notPaths: ["\\.env\\.(example|sample|template|dist)$"],
     codexDeny: DOTENV_DENY,
     denyRead: DOTENV_DENY,
-    match: ["cat ./.env", "Read app/.env.production"],
+    // The mixed example pins the exclusion's token semantics in the wiring's
+    // own proof: a real .env beside an excluded template spelling still fires
+    // (selfcheck blocks this exact command at run time; the selftest must
+    // agree, not call the whole subject covered).
+    match: [
+      "cat ./.env",
+      "Read app/.env.production",
+      "cat app/.env app/.env.example",
+    ],
     notMatch: ["Read app/.env.example", "echo $ENV_FILE"],
   },
   {

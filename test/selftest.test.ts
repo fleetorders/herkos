@@ -106,6 +106,35 @@ describe("--selftest asserts the baked rules against their policy examples", () 
     expect(r.exit).toBe(0);
   });
 
+  it("verifies a mixed exclusion example — a real target beside an excluded spelling still fires", () => {
+    // st_one used to apply the exclusion whole-subject: an example that
+    // merely CONTAINED an excluded spelling read as covered, so the selftest
+    // FAILED with "the rule exclusion covers it" on the very case enforce
+    // blocks at run time (selfcheck pins `cat ./app/.env ./app/.env.example`
+    // → exit 2). The baseline now carries that mixed example as a match, so
+    // the policy itself pins the token-removal semantics.
+    const compiled = compile(loadEffectivePolicy());
+    const dotenv = compiled.rules.find((r) => r.id === "dotenv-files")!;
+    expect(dotenv.match).toContain("cat app/.env app/.env.example");
+    const r = selftest(hookFrom(compiled));
+    expect(r.exit).toBe(0);
+    expect(r.stderr).not.toContain("the rule exclusion covers it");
+  });
+
+  it("bakes ONE token-removal loop — enforce, notice and st_one share remaining_tokens", () => {
+    // Three copies of the exclusion's token loop is how st_one drifted to
+    // whole-subject semantics in the first place. The helper is the single
+    // owner now: the per-token loop exists exactly once, inside it, and each
+    // of the three callers routes through it.
+    const script = generateHook({
+      ...compile(loadEffectivePolicy()),
+      logFile: "",
+    });
+    expect(script).toContain("remaining_tokens() {");
+    expect(script.match(/for tok in \$1; do/g)).toHaveLength(1);
+    expect(script.match(/=\$\(remaining_tokens "/g)).toHaveLength(3);
+  });
+
   it("a rule without examples asserts nothing and still reports zero", () => {
     const compiled = compile(loadEffectivePolicy());
     const stripped = {

@@ -10,7 +10,9 @@ const { compile, loadEffectivePolicy } = await import("../src/policy.js");
 const { claudeCodeAdapter, commandRuns, pathSpellings } = await import(
   "../src/adapters/claude-code.js"
 );
-const { codexAdapter } = await import("../src/adapters/codex.js");
+const { codexAdapter, hookWiredInHooksJson } = await import(
+  "../src/adapters/codex.js"
+);
 
 /**
  * Re-running `init` over an install made by an earlier release, on a machine
@@ -155,18 +157,164 @@ describe("re-running init over an earlier install", () => {
     expect(out).toContain("# my own note about the next project");
   });
 
+  // The comment-stripped shape: a formatter took every marker and comment
+  // with it, leaving the selector bare and a blank line inside the orphaned
+  // table. A TOML table runs to the next header, never to a blank line.
+  const STRIPPED =
+    'default_permissions = "herkos"\n' +
+    'model = "x"\n\n' +
+    '[projects."/work/a"]\ntrust_level = "trusted"\n\n' +
+    "[permissions.herkos]\n\n" +
+    'extends = ":workspace"\n' +
+    "[permissions.herkos.filesystem]\n" +
+    '"~/.ssh" = "deny"\n\n' +
+    '[projects."/work/b"]\ntrust_level = "trusted"\n';
+
+  it("Codex: an orphaned table does not end at a blank line — its keys go with it", () => {
+    const cfg = path.join(process.env.CODEX_HOME!, "config.toml");
+    fs.writeFileSync(cfg, STRIPPED);
+    codexAdapter.wire(compile(loadEffectivePolicy()));
+    const out = fs.readFileSync(cfg, "utf8");
+    // One extends: the fresh block's. The orphan's copy used to survive the
+    // blank line and land inside [projects."/work/a"], the user's table.
+    expect(out.match(/^extends = ":workspace"$/gm)).toHaveLength(1);
+    expect(out.match(/^\[permissions\.herkos\]$/gm)).toHaveLength(1);
+    expect(out.match(/^default_permissions = "herkos"/gm)).toHaveLength(1);
+    expect(out).toContain('[projects."/work/a"]');
+    expect(out).toContain('[projects."/work/b"]');
+    expect(out).toContain('model = "x"');
+  });
+
+  it("Codex: uninstall takes the bare selector too, not just the marked one", () => {
+    const cfg = path.join(process.env.CODEX_HOME!, "config.toml");
+    fs.writeFileSync(cfg, STRIPPED);
+    codexAdapter.unwire();
+    const out = fs.readFileSync(cfg, "utf8");
+    // The profile table is gone, so a surviving selector would name a profile
+    // that no longer exists — a config Codex refuses to load.
+    expect(out).not.toMatch(/default_permissions/);
+    expect(out).not.toMatch(/permissions\.herkos/);
+    expect(out).toContain('[projects."/work/b"]');
+    expect(out).toContain('model = "x"');
+  });
+
+  it("Codex: still sees the profile as selected when the selector's marker was stripped", () => {
+    const cfg = path.join(process.env.CODEX_HOME!, "config.toml");
+    fs.writeFileSync(cfg, STRIPPED);
+    codexAdapter.wire(compile(loadEffectivePolicy()));
+    // Rewrite the root line as a comment-stripper would: same key, no marker.
+    const stripped = fs
+      .readFileSync(cfg, "utf8")
+      .replace(
+        " # >>> herkos managed root key (see the herkos block at the end) <<<",
+        "",
+      );
+    fs.writeFileSync(cfg, stripped);
+    expect(codexAdapter.verify().ok).toBe(true);
+  });
+
+  // A `[permissions.herkos]` example inside a triple-quoted string is text,
+  // not a table header.
+  const STRING_EXAMPLE =
+    'model = "x"\n' +
+    'developer_instructions = """\n' +
+    "[permissions.herkos]  # an example, inside a string\n" +
+    'extends = ":workspace"\n' +
+    '"""\n\n' +
+    '[projects."/work/a"]\ntrust_level = "trusted"\n';
+
+  it("Codex: a herkos table inside a multiline string is an example, not a table", () => {
+    const cfg = path.join(process.env.CODEX_HOME!, "config.toml");
+    fs.writeFileSync(cfg, STRING_EXAMPLE);
+    codexAdapter.wire(compile(loadEffectivePolicy()));
+    const out = fs.readFileSync(cfg, "utf8");
+    expect(out).toContain(
+      "[permissions.herkos]  # an example, inside a string",
+    );
+    // The closing quotes survived: cleanup used to eat them and leave an
+    // unterminated string.
+    expect(out.match(/"""/g)).toHaveLength(2);
+    expect(out.match(/^\[permissions\.herkos\]$/gm)).toHaveLength(1);
+    expect(out).toContain('[projects."/work/a"]');
+  });
+
+  it("Codex: refuses a herkos table in a spelling it does not rewrite, writing nothing", () => {
+    const cfg = path.join(process.env.CODEX_HOME!, "config.toml");
+    const before = '[permissions."herkos"]\nextends = ":workspace"\n';
+    fs.writeFileSync(cfg, before);
+    // Same table, different bytes: appending the managed block would define
+    // [permissions.herkos] twice and Codex refuses the file.
+    expect(() => codexAdapter.wire(compile(loadEffectivePolicy()))).toThrow(
+      "more than once",
+    );
+    expect(fs.readFileSync(cfg, "utf8")).toBe(before);
+  });
+
   it("claims a command only when the path stands on its own", () => {
     const abs = path.join(home, ".config", "herkos", "hook-claude-code.sh");
     expect(commandRuns(OLD_CMD, abs)).toBe(true);
     expect(commandRuns(`sh '${abs}' --harness codex`, abs)).toBe(true);
-    // Codex matches on the serialized entry, where quotes are escaped.
-    expect(commandRuns(JSON.stringify({ command: OLD_CMD }), abs)).toBe(true);
+    // Quote-split spellings expand to the same file: unmatched, init appended
+    // a second entry — the 0.4.1 double registration, in its quoted form.
+    expect(
+      commandRuns('sh "$HOME"/.config/herkos/hook-claude-code.sh', abs),
+    ).toBe(true);
+    expect(
+      commandRuns('sh "${HOME}"/.config/herkos/hook-claude-code.sh', abs),
+    ).toBe(true);
+    // A command that NAMES the path without running it is not a wiring.
+    expect(commandRuns(`cat ${abs}`, abs)).toBe(false);
+    expect(commandRuns(`grep -q x "${abs}" && echo found`, abs)).toBe(false);
+    // Knowingly unclaimed: a genuine invocation the runner set cannot see
+    // (the path feeds xargs, not a runner). A miss costs a duplicate
+    // registration; a false claim costs silent enforcement loss.
+    expect(commandRuns(`echo ${abs} | xargs`, abs)).toBe(false);
     // Someone else's file that merely starts or ends with our path.
     expect(commandRuns(`sh "${abs}.backup"`, abs)).toBe(false);
     expect(commandRuns(`sh "/mirror${abs}"`, abs)).toBe(false);
     expect(
       commandRuns('sh "$HOME/.config/herkos/hook-claude-code.sh-old"', abs),
     ).toBe(false);
+    // The editor-backup suffix is a path character, not a boundary: claiming
+    // it silently removed a registration that was never herkos's.
+    expect(
+      commandRuns('sh "$HOME/.config/herkos/hook-claude-code.sh~"', abs),
+    ).toBe(false);
+    expect(commandRuns(`sh "${abs}~"`, abs)).toBe(false);
+    // The ~-spelling of our own path is still ours, marker or not.
+    expect(commandRuns("sh ~/.config/herkos/hook-claude-code.sh", abs)).toBe(
+      true,
+    );
+  });
+
+  it("Codex: the wired-check parses the hooks file instead of matching text in it", () => {
+    const abs = path.join(home, ".config", "herkos", "hook-claude-code.sh");
+    const file = (command: string): string =>
+      JSON.stringify(
+        {
+          hooks: {
+            PreToolUse: [
+              {
+                matcher: "^Bash$",
+                hooks: [{ type: "command", command }],
+              },
+            ],
+          },
+        },
+        null,
+        2,
+      );
+    // The registered command as the file serializes it: quotes escaped,
+    // multi-line. Still a wiring.
+    expect(hookWiredInHooksJson(file(`sh "${abs}" --harness codex`))).toBe(
+      true,
+    );
+    // A wrapper that merely NAMES the script is not a wiring — the raw-text
+    // match used to claim it, and status reported enforcement that was not
+    // there.
+    expect(hookWiredInHooksJson(file(`cat "${abs}" | wc -l`))).toBe(false);
+    // A file that is not JSON says "not wired", never "maybe".
+    expect(hookWiredInHooksJson("{not json")).toBe(false);
   });
 
   const SHARED = {

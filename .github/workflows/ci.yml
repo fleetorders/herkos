@@ -8,7 +8,11 @@ jobs:
   test:
     # macOS too: its awk is a target of its own (UTF-8 aware, unlike mawk and
     # BusyBox, and not gawk), and some reader bugs exist only there.
+    # Both legs' results are the point — a macOS-leg failure must not cancel the
+    # ubuntu leg (or the reverse); that hides exactly the cross-OS divergence
+    # the matrix exists to observe.
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}

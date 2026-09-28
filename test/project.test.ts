@@ -143,6 +143,16 @@ describe("wiring a repo's project policy", () => {
     expect(r.error).toBeUndefined(); // no timeout
     expect(r.status).toBe(0);
     expect(r.stderr).toContain("project hook not readable");
+    // The fallback is HEARD, not just logged: this is an exit-0 path, where
+    // stderr reaches only the debug log on Claude Code (D-005) — so the
+    // registered command also says it as a JSON systemMessage on stdout, the
+    // channel the hook body's flush_notices verified for non-blocking exits.
+    expect(r.stdout.trim()).toBe(
+      '{"systemMessage":"herkos DEGRADED: project hook not readable — enforcement OFF for this call."}',
+    );
+    expect(JSON.parse(r.stdout.trim()).systemMessage).toContain(
+      "project hook not readable",
+    );
   });
 
   it("bakes NO machine-specific path into the committed hook (public-repo safe)", () => {

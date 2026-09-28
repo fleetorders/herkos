@@ -101,6 +101,53 @@ describe("a degradation is heard, not only logged (D-008)", () => {
     expect(fs.existsSync(path.join(stateDir, "degraded-sess-excl"))).toBe(true);
   });
 
+  it("an OPEN rule's broken exclusion degrades too — a notice decided by a pattern that cannot be read is not sent", () => {
+    write({
+      rules: [
+        {
+          id: "note-secrets",
+          class: "note",
+          disposition: "open",
+          description: "near secrets",
+          message: "you are near the secrets directory",
+          paths: ["secrets/"],
+          notPaths: ["("],
+        },
+      ],
+    });
+    const r = fire(
+      withSession(
+        "sess-open-excl",
+        call("Read", { file_path: "secrets/prod/db.json" }),
+      ),
+      cc,
+    );
+    // The benign carve-out cannot be evaluated; before the guard its grep
+    // error read as "no match" and the notice fired on exactly the
+    // spellings the carve-out exists to spare — D-009's silent flip, in the
+    // noisy direction.
+    expect(r.exit).toBe(0);
+    expect(r.stderr).toContain(
+      "rule note-secrets exclude pattern could not be evaluated",
+    );
+    expect(r.stderr).not.toContain("herkos NOTICE (rule note-secrets)");
+    expect(systemMessage(r.stdout)).toContain(
+      "exclude pattern could not be evaluated",
+    );
+  });
+
+  it("folds a session id that is not a flat filename before it names a marker", () => {
+    // A session_id is payload input. The "degraded-" prefix already kept a
+    // bare "../../evil" from traversing; the fold makes the flat-directory
+    // invariant unconditional rather than an accident of the prefix, the
+    // same fold the uncovered marker applies to tool names.
+    const r = fire(withSession("../../evil", MALFORMED), cc);
+    expect(r.exit).toBe(0);
+    expect(fs.existsSync(path.join(stateDir, "degraded-.._.._evil"))).toBe(
+      true,
+    );
+  });
+
   it("announces a value the reader decoded lossily instead of silently mangling it", () => {
     const raw =
       '{"tool_name":"Bash","tool_input":{"command":"caf\\u00e9 au lait"}}';

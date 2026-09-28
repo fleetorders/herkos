@@ -164,10 +164,11 @@ describe("both dispositions on the same call: the notice surfaces, then the bloc
     expect(r.exit).toBe(2);
     expect(r.stderr).toContain("herkos NOTICE (rule heads-up)");
     expect(r.stderr).toContain("BLOCKED (herkos) rule curl-pipe-shell");
-    // The pending notice is flushed as a systemMessage before the block exits.
-    expect(
-      (JSON.parse(r.stdout) as { systemMessage: string }).systemMessage,
-    ).toContain("herkos NOTICE (rule heads-up)");
+    // The pending notice rides stderr beside the refusal: exit 2's verified
+    // channel is stderr, and a stdout systemMessage there is not parsed — it
+    // surfaces as raw JSON text next to the refusal (measured on a live
+    // harness), so the block path emits nothing on stdout.
+    expect(r.stdout).toBe("");
   });
 });
 

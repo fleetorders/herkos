@@ -63,6 +63,13 @@
  * Deliberately free of single quotes, so it embeds in the hook as one quoted
  * shell word.
  */
+/**
+ * The first scan-window size, in bytes; the reader doubles it over plain text
+ * and resets it after an escape. Exported so tests derive where the window
+ * ends fall from the scheme instead of hardcoding them.
+ */
+export const SCAN_WINDOW = 64;
+
 export const EXTRACT_AWK = String.raw`
 BEGIN {
   n = split(pkeys, tmp, " ")
@@ -167,7 +174,7 @@ function put(tag, piece) {
 function readstr(mode, tag,    buf, w, win, piece, ch, e, h, code, bad, hx, j) {
   pos++
   buf = ""
-  w = 64
+  w = ${SCAN_WINDOW}
   while (pos <= len) {
     win = substr(s, pos, w)
     if (!match(win, /["\\]/)) {
@@ -177,7 +184,7 @@ function readstr(mode, tag,    buf, w, win, piece, ch, e, h, code, bad, hx, j) {
       if (w < 65536) w = w * 2
       continue
     }
-    w = 64
+    w = ${SCAN_WINDOW}
     piece = substr(win, 1, RSTART - 1)
     pos += RSTART - 1
     if (piece != "") {
