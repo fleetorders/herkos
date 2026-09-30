@@ -25,8 +25,7 @@ const run = (command: string, harness = false) =>
 
 afterEach(() => fs.rmSync(policyFile, { force: true }));
 
-// The consumer shape this pins (an independent tier-1 review of a consumer
-// repo's install): a catastrophic command-never rule declared as one prefix
+// The shape this pins: a catastrophic command-never rule declared as one prefix
 // token. The old trailing class ([[:space:]]|$) let every punctuation shape
 // below through — only whitespace- or EOL-terminated spellings were caught.
 const NO_RESET = {

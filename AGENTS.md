@@ -41,8 +41,8 @@ one policy into each installed agent harness's native wiring. Published publicly
 - **Public repo.** Commit author is the identity in local git config. Publishing
   exposes ALL history, so no tracked file or commit message may carry absolute
   paths, hostnames or machine detail, workplace or third-party identifiers,
-  credential material, references to the maintainer's other work, or internal
-  provenance.
+  credential material, or any reference to a project, tool or context that a
+  reader of this repo cannot see.
 
 ## Layout
 
