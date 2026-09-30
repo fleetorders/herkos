@@ -53,8 +53,6 @@ const PROJECT = {
 };
 
 describe("project policy loading and validation", () => {
-  afterEach(() => {});
-
   it("loads only the repo's own rules, never the baseline", () => {
     writeJson("herkos.json", PROJECT);
     const eff = loadProjectPolicy(repo);
@@ -404,9 +402,7 @@ describe("verifyProject — the CI drift check", () => {
 });
 
 describe("a project policy can switch the blocked-call log on", () => {
-  // LOG_FILE used to compile to empty with no way to set it — log_block,
-  // rotation and the harness attribution were dead code in every committed
-  // hook. Now herkos.json may name a repo-relative file, resolved at RUN time
+  // herkos.json may name a repo-relative file, resolved at RUN time
   // against the hook's own directory so any clone logs beside its own hook.
   it("bakes a run-time-resolved repo-relative LOG_FILE, never an absolute path", () => {
     writeJson("herkos.json", { ...PROJECT, logFile: "herkos-blocks.jsonl" });

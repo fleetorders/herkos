@@ -17,7 +17,7 @@ const hookFor = () =>
 afterEach(() => fs.rmSync(policyFile, { force: true }));
 
 // One rule whose pattern spans a space, one whose pattern anchors at the start
-// — together they pin the two halves of the folded-value semantics (D-006).
+// — together they pin the two halves of the folded-value semantics (docs/decisions.md, D-006).
 const RULES = {
   rules: [
     {

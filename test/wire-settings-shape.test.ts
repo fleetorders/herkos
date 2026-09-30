@@ -52,8 +52,8 @@ describe("wire() refuses wrong-shape harness settings cleanly", () => {
     ["the whole file is an array", "[]", /holds an array, not a JSON object/],
     ["the whole file is null", "null", /holds null, not a JSON object/],
     ["the file is not valid JSON", "{oops", /is not valid JSON/],
-    // Nested shapes wire() dereferences: these used to throw inside wire()
-    // after the hook file was already written — the half-applied install.
+    // Nested shapes wire() dereferences: each must be refused before the hook
+    // file is written, never leave a half-applied install.
     [
       "hooks.PreToolUse is a string",
       '{"hooks": {"PreToolUse": "x"}}',

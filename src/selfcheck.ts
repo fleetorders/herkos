@@ -19,7 +19,7 @@ export interface CheckCase {
   payload: string;
   /**
    * The baseline rule this case exercises. Disabling a rule by id is a
-   * sanctioned action (D-003), so when that rule is off the case must PASS
+   * sanctioned action (docs/decisions.md, D-003), so when that rule is off the case must PASS
    * THROUGH (exit 0) — proving the disable held — rather than be reported as
    * a broken guard.
    */

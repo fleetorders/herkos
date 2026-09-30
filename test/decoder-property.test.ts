@@ -7,7 +7,7 @@ const { compile, loadEffectivePolicy } = await import("../src/policy.js");
 const { generateHook } = await import("../src/adapters/claude-code.js");
 
 /**
- * The property test D-008 asked for: whatever a real JSON encoder emits, the
+ * A property test: whatever a real JSON encoder emits, the
  * awk reader decodes it to exactly the text a rule is checked against — or
  * says (W) that it could not. The model below IS the decoder's contract:
  * printable ASCII passes through, shell-whitespace escapes become spaces, a
@@ -136,7 +136,7 @@ describe("the decoder's pinned escapes (hand-written payloads)", () => {
     expect(lines.some((l) => l.startsWith("W\t"))).toBe(true);
   });
 
-  it("decodes a malformed \\u sequence to a space — the old index()-1 garbage — and says so", () => {
+  it("decodes a malformed \\u sequence to a space and says so", () => {
     const lines = extract(raw("a\\uZZZZb"));
     expect(lines.some((l) => l === "C\ta b")).toBe(true);
     expect(lines.some((l) => l.startsWith("W\t"))).toBe(true);

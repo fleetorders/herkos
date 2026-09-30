@@ -1,7 +1,8 @@
 /**
  * The policy model: what an agent must never do on this machine.
  *
- * Two rule classes in v0.1, both about removing the payoff of a hijacked agent:
+ * The baseline uses two rule classes, both about removing the payoff of a
+ * hijacked agent (a rule's class is a label, and user rules may name others):
  * - "credential-read": reading files that hold live secret values.
  * - "fetched-exec": piping just-downloaded content straight into a shell.
  *
@@ -23,7 +24,7 @@ import { HERKOS_VERSION } from "./version.js";
  * two curated baseline classes; a user rule may name its own — `command-never`,
  * `outbound-data`, whatever describes it — so the refusal names the real class
  * instead of one of two that would lie. The label is display and grouping only;
- * it changes no matching. See D-003: the baseline stays curated and small; the
+ * it changes no matching. See docs/decisions.md, D-003: the baseline stays curated and small; the
  * openness is for the user's own never-list.
  */
 export type RuleClass = string;
@@ -255,7 +256,7 @@ export const BASELINE: Rule[] = [
     // Matched as path fragments: covers .env, .env.local, .env.production, etc.
     paths: ["/.env"],
     // ...except the committed placeholder templates, which convention holds to
-    // be secret-free and which everyday work reads and writes (D-003: a false
+    // be secret-free and which everyday work reads and writes (docs/decisions.md, D-003: a false
     // positive in a default rule trains users to disable the guard).
     notPaths: ["\\.env\\.(example|sample|template|dist)$"],
     codexDeny: DOTENV_DENY,
@@ -437,7 +438,7 @@ export function loadProjectPolicy(repoRoot: string): EffectivePolicy {
 // Validation — catches policy mistakes BEFORE they are compiled into a hook.
 // The hook bakes patterns into a shell script and evaluates them with
 // `grep -E`; a pattern that grep rejects would make that rule fail open in
-// silence at run time (D-004: degrade loudly, never silently allow). So the
+// silence at run time (docs/decisions.md, D-004: degrade loudly, never silently allow). So the
 // validator asks grep itself, the same evaluator, while wiring is still
 // refusable.
 // ---------------------------------------------------------------------------
@@ -640,7 +641,7 @@ function warnSubsumedPrefixes(
   }
   // One grep per prefix over every other spelling, one per line (-n names the
   // lines that match), instead of one grep per ordered pair. Embedded newlines
-  // fold to spaces, as the hook folds them (D-006), so each probe is one line.
+  // fold to spaces, as the hook folds them (docs/decisions.md, D-006), so each probe is one line.
   const probes = prefixes.map((p) => ` ${spell(p).replace(/[\r\n]+/g, " ")} `);
   for (let i = 0; i < prefixes.length; i++) {
     const hits = grepMatchingLines(prefixRegex(prefixes[i]!), probes);
@@ -1007,7 +1008,7 @@ export function denyReadTargets(rule: Rule): string[] {
  * a token boundary. Lets one declared prefix be enforced by the hook on every
  * harness and by a native prefix layer where one exists.
  *
- * The two boundaries are deliberately asymmetric (D-007). On the LEADING side
+ * The two boundaries are deliberately asymmetric (docs/decisions.md, D-007). On the LEADING side
  * `.`, `-`, `_` continue a token, so a name that merely shares a prefix
  * (`migrate-v2` vs `migrate-v2.sh`) is not a match. On the TRAILING side only
  * alphanumerics, `_` and `-` continue the token — every other character ends

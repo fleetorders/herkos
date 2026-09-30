@@ -37,9 +37,9 @@ function printValidation(v: ValidationResult): void {
 
 /**
  * Load the effective policy, or die trying with a one-line diagnosis: a
- * corrupt user policy file is a typo, and a typo is not a stack trace. Every
- * command that reads the policy goes through here, so `status`, `init`,
- * `check`, `rules`, `validate`, `discover` and `probe` all refuse cleanly.
+ * corrupt user policy file is a typo, and a typo is not a stack trace.
+ * `status`, `init`, `check`, `rules`, `validate` and `probe` go through here;
+ * `discover` has its own loader that reports the same way.
  * The diagnosis goes to stderr — stdout may be piped (`herkos check | grep`),
  * and the reason for an exit 1 must reach the terminal the user is looking at.
  */

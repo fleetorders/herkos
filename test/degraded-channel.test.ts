@@ -32,7 +32,7 @@ afterEach(() => fs.rmSync(policyFile, { force: true }));
 const systemMessage = (stdout: string): string =>
   (JSON.parse(stdout) as { systemMessage: string }).systemMessage;
 
-describe("a degradation is heard, not only logged (D-008)", () => {
+describe("a degradation is heard, not only logged (docs/decisions.md, D-008)", () => {
   it("puts an unparseable payload's DEGRADED line on the heard channel on Claude Code", () => {
     const r = fire(MALFORMED, cc);
     expect(r.exit).toBe(0);
@@ -65,10 +65,10 @@ describe("a degradation is heard, not only logged (D-008)", () => {
   });
 
   it("degrades loudly, rule named, when a block rule's EXCLUDE regex breaks", () => {
-    // A broken exclusion used to read as "does not match", silently flipping
-    // the verdict as if the carve-out did not exist — and dumping raw grep
-    // text into the session. It now rides the same degrade path as the main
-    // pattern: rule off for the call, said on the heard channel, nothing raw.
+    // Read as "does not match", a broken exclusion would silently flip the
+    // verdict as if the carve-out did not exist. It takes the same degrade
+    // path as the main pattern: rule off for the call, said on the
+    // user-visible channel, no raw grep text.
     write({
       rules: [
         {
@@ -158,7 +158,7 @@ describe("a degradation is heard, not only logged (D-008)", () => {
   });
 });
 
-describe("degradation is sticky for the session (D-008)", () => {
+describe("degradation is sticky for the session (docs/decisions.md, D-008)", () => {
   it("a later well-formed call in the same session keeps announcing it", () => {
     const first = fire(withSession("sess-1", MALFORMED), cc);
     expect(first.exit).toBe(0);
@@ -213,7 +213,7 @@ describe("degradation is sticky for the session (D-008)", () => {
   });
 });
 
-describe("an UNCOVERED tool reaches the user once per session and tool (D-008)", () => {
+describe("an UNCOVERED tool reaches the user once per session and tool (docs/decisions.md, D-008)", () => {
   const uncovered = (sid: string, tool: string) =>
     withSession(
       sid,
@@ -243,8 +243,8 @@ describe("an UNCOVERED tool reaches the user once per session and tool (D-008)",
   });
 
   it("writing an UNCOVERED marker expires week-old markers, without any degradation", () => {
-    // Expiry used to run only on the DEGRADED path, so a machine that only
-    // ever saw uncovered tools kept every marker forever.
+    // Expiry must run on every marker-writing path, or a machine that only
+    // ever sees uncovered tools keeps every marker forever.
     fs.mkdirSync(stateDir, { recursive: true });
     const stale = path.join(stateDir, "uncovered-old-session-mcp__x");
     fs.writeFileSync(stale, "");
@@ -261,10 +261,9 @@ describe("an UNCOVERED tool reaches the user once per session and tool (D-008)",
 });
 
 describe("a path-bearing tool that yields nothing is drift, not quiet", () => {
-  // The KNOWN_TOOLS mute used to silence Bash itself: a payload whose command
-  // key was renamed parsed cleanly, extracted nothing, and the one class of
-  // call that can trip the never-list went unchecked with no word. The split:
-  // tools whose arguments are paths or commands announce on the existing
+  // A payload whose command key was renamed parses cleanly and extracts
+  // nothing; muting that for Bash would leave the one class of call that can
+  // trip the never-list unchecked with no word. So tools whose arguments are paths or commands announce on the existing
   // UNCOVERED path; tools whose arguments never are stay quiet.
   const drift = (sid: string, tool: string) =>
     withSession(

@@ -330,7 +330,7 @@ export async function discoverCommand(
     effective = loadEffectivePolicy();
   } catch (e) {
     // A corrupt policy file is a typo, not a stack trace.
-    process.stdout.write(`herkos: ${(e as Error).message}\n`);
+    process.stderr.write(`herkos: ${(e as Error).message}\n`);
     process.exit(1);
   }
   const found = discoverCandidates(effective, home);

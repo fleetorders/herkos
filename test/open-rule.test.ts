@@ -54,7 +54,7 @@ describe("an open rule surfaces a message and lets the call through", () => {
     );
     expect(r.exit).toBe(0);
     // stderr at exit 0 reaches only the debug log — the systemMessage line is
-    // the channel that is actually surfaced (D-005).
+    // the channel that is actually surfaced (docs/decisions.md, D-005).
     expect(r.stdout).toContain('"systemMessage"');
     const decoded = JSON.parse(r.stdout) as { systemMessage: string };
     expect(decoded.systemMessage).toContain(

@@ -21,8 +21,7 @@ const selftest = (script: string) =>
 afterEach(() => fs.rmSync(policyFile, { force: true }));
 
 describe("--selftest asserts the baked rules against their policy examples", () => {
-  // The branch used to print one line and verify nothing. Now every rule's
-  // baked patterns are checked, by the hook itself with grep -E, against the
+  // Every rule's baked patterns are checked, by the hook itself with grep -E, against the
   // policy's match / notMatch examples — so a baked rule that drifted from
   // its examples fails the wiring's own proof instead of silently not
   // matching at run time.
@@ -66,9 +65,8 @@ describe("--selftest asserts the baked rules against their policy examples", () 
   });
 
   it("FAILS when grep cannot evaluate a baked pattern — that rule is OFF at run time", () => {
-    // An unevaluable pattern used to read as "no match", so every notMatch
-    // example passed and the proof reported success for a rule enforce
-    // turns off.
+    // Read as "no match", an unevaluable pattern would pass every notMatch
+    // example and report success for a rule that enforcement turns off.
     const compiled = compile(loadEffectivePolicy());
     const tampered = {
       ...compiled,

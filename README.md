@@ -144,52 +144,12 @@ rotates past 1 MiB, and `uninstall` leaves it in place with your policy.
 
 ## Proof against other spellings
 
-A PASS that only shows the script runs proves little. `herkos check` also runs a
-**bypass corpus**: each baseline rule attacked by other spellings — a glob in
-place of a file name, a `cd` then a relative read, a symlink, a path built at run
-time, a vendor CLI reading the file itself, fetched code through `sudo` or
-process substitution — plus benign calls that must never be refused. For every
-case it measures the hook's verdict, credits the native layers (deny rules, OS
-sandbox, prefix rules) only where they are wired on your machine, and names each
-case nothing wired holds as **UNGUARDED**. Two gaps are recorded rather than
-papered over, because one text pattern cannot tell them from everyday use:
-downloading a script to a file and then running it, and piping a download to an
-interpreter.
-
-One class of refusal is **documented rather than fixed**: a shell command whose
-_text_ names a credential path. `rg '.aws/credentials' .`, documentation that
-mentions `~/.ssh/id_`, an echo of such a label — all refused, because the hook
-matches Bash command text against the never-list's path fragments (that is also
-how `cat ~/.ssh/id_rsa` is caught) and text cannot reveal intent: the same
-string is a search term in one command and a file read in the next. The file
-tools' search arguments are exempt by name — a `Grep` pattern is free text —
-but inside a shell there is no such signal, and refusing is the safe side. The
-corpus carries this as a known-refusal case, so the behavior stays pinned and
-named, never silent.
-
-Your own rules can carry examples, which `validate` runs with the hook's own
-evaluator before anything is wired — and the generated hook re-checks the same
-examples itself: `--selftest` (run by `herkos check`) fails if a baked rule no
-longer behaves as its examples say:
-
-```json
-{
-  "id": "no-force-push",
-  "class": "fetched-exec",
-  "description": "Force-pushing over shared history",
-  "commandPrefixes": [["git", "push", "--force"]],
-  "match": ["git push --force origin main"],
-  "notMatch": ["git push origin main", "git push --force-with-lease"]
-}
-```
-
-One semantics note on `commandPrefixes`, because the name under-sells what the
-hook does: each spelling compiles to a bounded **token** match, not an anchored
-prefix. It fires wherever the tokens stand as whole shell tokens in the line —
-`bin/deploy.sh` also catches `sh bin/deploy.sh` and `./bin/deploy.sh`, and
-`ls <token>` is not exempt. A harness-native prefix layer (Codex execpolicy)
-reads them as true program prefixes; the hook is deliberately wider so a
-called-by-path or wrapped invocation cannot dodge the rule.
+`herkos check` also runs a **bypass corpus**: each baseline rule attacked by other
+spellings (a glob, a `cd` then a relative read, a symlink, fetched code through `sudo`),
+plus benign calls that must never be refused. Each case nothing wired holds is named
+**UNGUARDED**. Your own rules can carry `match` / `notMatch` examples, which `validate`
+and the hook's `--selftest` both check. Details, the known gaps and the one documented
+refusal class: [docs/bypass-corpus.md](docs/bypass-corpus.md).
 
 ## Finding what to add
 
@@ -260,74 +220,12 @@ that actually block.
 
 ## A never-list a repo commits (`herkos project`)
 
-The machine policy protects every session on your machine. A **project policy**
-lets a repository carry its own never-list for every contributor — "never read
-`secrets/prod`", "never run the reset script". Commit a `herkos.json` at the repo
-root and run `herkos project init`:
-
-```sh
-herkos project init      # compile ./herkos.json into the repo's .claude project hook
-herkos project check     # CI: fail if the committed hook drifted from herkos.json
-```
-
-It compiles the repo's rules into a **self-contained hook checked into the repo**
-(`.claude/hooks/herkos-project.sh`, registered on `PreToolUse` in
-`.claude/settings.json` via `$CLAUDE_PROJECT_DIR`). Commit `.claude/` and every
-clone is guarded — **even a contributor who has never installed herkos**, because
-the hook needs only `sh`, `awk` and `grep`.
-
-Two properties keep it safe:
-
-- **It composes; it can only add.** The project hook runs _alongside_ each
-  contributor's machine hook — Claude Code runs hooks from every settings level
-  and any refusal blocks — so a repo's policy can only _add_ to the machine's
-  never-list, never weaken it. That's why `herkos.json` has no `disable`
-  (herkos rejects one). A checked-out repo can't turn your protection off.
-- **It carries nothing machine-specific.** The committed hook names the
-  repo-relative `herkos.json`, no home path — clean to commit to a public repo.
-  It carries the policy stamp, so `herkos project check` in CI fails when someone
-  edits `herkos.json` without re-running init.
-
-A `herkos.json` at the repo root (the file is strict JSON — comments are not
-valid in it, so a copy of this example works as-is):
-
-```json
-{
-  "rules": [
-    {
-      "id": "no-prod-secrets",
-      "class": "credential-read",
-      "description": "the repo's production secrets",
-      "paths": ["secrets/prod/"]
-    },
-    {
-      "id": "no-reset-script",
-      "class": "command-never",
-      "description": "the destructive reset script",
-      "commandPrefixes": [["./scripts/reset-db.sh"]]
-    }
-  ]
-}
-```
-
-`commandPrefixes` is a list of prefixes, each prefix itself a list of tokens
-with the program first: `[["git", "push"]]` refuses every `git push …`, and a
-one-token prefix like the one above refuses that script however it is invoked.
-A flat list (`["git", "push"]`) is rejected at `init` with the rule's id — the
-nesting is what says "these tokens, in order, as one command".
-
-**Claude Code only.** Codex resolves config from `~/.codex` with no repo-local
-layer, so a repo's Codex sessions rest on the machine policy, not the repo's own
-list — herkos says so rather than pretend a per-repo Codex guard exists.
-
-**Blocked-call log (optional).** A committed hook logs nothing by default — a
-stranger's clone must not be dirtied. `herkos.json` may set
-`"logFile": "herkos-blocks.jsonl"`: every refusal then appends one JSON line
-(time, harness, tool, rule — never the command text) to that file, resolved at
-run time against the hook's own directory, so any clone or linked worktree
-logs beside its own hook rather than a path baked on one machine. Gitignore
-the file (and the `sessions/` state dir beside it); `herkos project check`
-names it in CI when you haven't.
+A repository can carry its own never-list for every contributor: commit a `herkos.json`
+at the repo root and run `herkos project init`. It compiles into a self-contained hook
+checked into the repo (Claude Code only), which can only add to each contributor's
+machine policy, never weaken it; `herkos project check` fails CI when the hook drifts
+from `herkos.json`. Format, safety properties and the optional blocked-call log:
+[docs/project-policy.md](docs/project-policy.md).
 
 ## Policy file
 
@@ -356,7 +254,20 @@ npm run build
 npm run typecheck
 ```
 
-Roadmap: [ROADMAP.md](ROADMAP.md) · Decisions: [DECISIONS.md](DECISIONS.md)
+The git hooks under `.githooks/` are generated by [etymd](https://www.npmjs.com/package/etymd)
+and do nothing where it is not installed; `.githooks/*.local` runs a gitignored `local/`
+directory for machine-specific checks. The design record is [docs/decisions.md](docs/decisions.md).
+
+## Roadmap
+
+- Adapters for more harnesses, each a new adapter behind the shared interface.
+- A guided `herkos init` that reports, per harness, what it can and cannot enforce
+  before writing anything.
+- More baseline rule classes, added only when almost never legitimate (candidate:
+  detecting tampering with agent instruction files).
+- Organisation policy: compile the never-list into each harness's managed-policy
+  layer so it cannot be overridden locally.
+- A team view: one policy, many machines, with a record of per-user overrides.
 
 ## License
 

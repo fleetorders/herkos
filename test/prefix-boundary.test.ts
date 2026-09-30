@@ -25,8 +25,7 @@ const run = (command: string, harness = false) =>
 
 afterEach(() => fs.rmSync(policyFile, { force: true }));
 
-// The consumer shape this pins (an independent tier-1 review of a consumer
-// repo's install): a catastrophic command-never rule declared as one prefix
+// The shape this pins: a catastrophic command-never rule declared as one prefix
 // token. The old trailing class ([[:space:]]|$) let every punctuation shape
 // below through — only whitespace- or EOL-terminated spellings were caught.
 const NO_RESET = {
@@ -40,7 +39,7 @@ const NO_RESET = {
   ],
 };
 
-describe("a prefix rule ends at shell punctuation, not just whitespace (D-007)", () => {
+describe("a prefix rule ends at shell punctuation, not just whitespace (docs/decisions.md, D-007)", () => {
   it.each([
     ["sh migrate-v2-reset.sh; echo done", "a semicolon follows the spelling"],
     ["bash -c 'migrate-v2-reset.sh'", "the spelling is quoted after -c"],
