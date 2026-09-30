@@ -1,11 +1,10 @@
 /**
  * Which tool arguments the hook reads.
  *
- * The hook used to be registered for two fixed tool names and read two fixed
- * argument names. Everything else — `Glob`, `NotebookEdit`, `PowerShell`, and
- * every tool-server (MCP) tool a user configures — reached the session without
- * passing the never-list at all, and a matcher list that must be edited each
- * time a harness grows a tool is a list that falls behind.
+ * A hook registered for a fixed list of tool names lets every other tool —
+ * `Glob`, `NotebookEdit`, `PowerShell`, every tool-server (MCP) tool a user
+ * configures — skip the never-list, and a list that must be edited each time a
+ * harness gains a tool falls behind.
  *
  * So the hook matches EVERY tool and reads arguments by NAME, at any depth of
  * the argument object. Two vocabularies, because the two rule classes want
@@ -17,8 +16,8 @@
  *   values are matched against BOTH the path fragments (a command that names a
  *   credential file) and the command patterns (fetched code piped to a shell).
  *
- * Deliberately NOT in either list, because the curation bar applies to the
- * matcher as much as to a rule:
+ * Deliberately NOT in either list, because the matcher is held to the same
+ * bar as a baseline rule (no false positives; docs/decisions.md, D-003):
  *
  * - `pattern` — a path glob in `Glob`, but a search expression in `Grep`, so
  *   searching a repository for the literal name of a token file would be
@@ -78,8 +77,9 @@ export const COMMAND_KEYS: readonly string[] = [
  * they get no quiet treatment: a payload that parses cleanly but yields NO
  * readable value is schema drift (the harness renamed or restructured the very
  * keys the rules are checked against), and the call is announced UNCOVERED
- * exactly like an unknown tool — once per session and tool on the heard
- * channel, D-008 — instead of being muted into silent non-enforcement.
+ * exactly like an unknown tool — once per session and tool on the
+ * user-visible channel (docs/decisions.md, D-008) — instead of being muted into
+ * silent non-enforcement.
  *
  * Deliberately NOT here, though their names suggest it:
  * - `Glob` / `Grep` — their primary argument is `pattern`, which herkos

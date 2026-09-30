@@ -1,11 +1,11 @@
 /**
  * The hook's payload reader: a JSON extractor written in POSIX awk.
  *
- * The enforcement path must depend on nothing. It used to parse the tool call
- * with `jq`, so a machine or container image without jq announced "enforcement
- * OFF" on every call — the guard present, installed, and doing nothing. awk is a
- * POSIX utility that every such system and minimal image already has (BusyBox
- * included), and the hook already needs `grep` and `sh` from the same set.
+ * The enforcement path must depend on nothing. A parser such as `jq` is missing
+ * from many machines and container images, and without it the hook could only
+ * announce "enforcement OFF" on every call. awk is a POSIX utility that every
+ * such system and minimal image already has (BusyBox included), and the hook
+ * already needs `grep` and `sh` from the same set.
  *
  * One pass over the payload emits one record per line:
  *
@@ -34,13 +34,14 @@
  * `command: {program: "sh", ...}`) does not hide the text: the promise is
  * every string UNDER a command-shaped key, not merely directly beside one. A
  * value whose whole chain carries no vocabulary key (Write's `content`) is
- * skipped unread, as before. Every copy of a duplicated key is read — a
+ * skipped unread. Every copy of a duplicated key is read — a
  * last-value-wins parser would see only the final copy. `\uXXXX` escapes are
  * decoded in keys and values (non-ASCII becomes "?"), so an escaped spelling of
  * a fragment is no way around it. Text that merely looks like JSON inside a
  * string is never taken for structure.
  *
- * The decoder is honest about what it cannot represent (D-008): a `\u` escape
+ * The decoder is honest about what it cannot represent (docs/decisions.md,
+ * D-008): a `\u` escape
  * of a non-ASCII codepoint decodes to "?", a control codepoint (or a malformed
  * `\u` sequence, or `\b`/`\f` — not shell whitespace) decodes to a space, and
  * the payload then carries a W record — the hook announces it rather than let

@@ -3,5 +3,5 @@ dist/
 *.local.*
 .env
 .DS_Store
-.etymd/cache/
 local/
+.etymd/

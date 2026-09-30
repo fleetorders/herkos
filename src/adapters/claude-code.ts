@@ -394,7 +394,7 @@ export function detectConfigDir(): string {
  * into the generated script (rule ids, descriptions, path and command regexes,
  * the policy path) goes through this — a pattern containing a single quote
  * must never break the script's syntax, or the hook exits 2 on every call and
- * bricks the session (D-004).
+ * bricks the session (docs/decisions.md, D-004).
  */
 export function shQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
@@ -431,15 +431,15 @@ export function readInstalledStamp(file: string = hookPath()): string | null {
  * - surfaces an OPEN rule's message without blocking: printed to stderr as it
  *   is collected, and on Claude Code also as a JSON systemMessage on stdout —
  *   stderr at exit 0 reaches only the debug log there, so the JSON line is the
- *   one channel that is both visible and non-blocking (D-005);
+ *   one channel that is both visible and non-blocking (docs/decisions.md, D-005);
  * - fails OPEN but LOUD when it cannot parse its input (a security hook that
  *   hard-blocks on every malformed call would brick the session; one that
  *   silently allows would be worse — so it allows and announces). The same
  *   applies per-rule at grep time: a pattern grep cannot evaluate — the rule's
  *   own or its exclusion — turns that ONE rule off for the call, loudly, and
  *   the rest of the never-list stays
- *   enforced — never exit 2 on a grep error. Since D-008 the announcements
- *   ride the heard channel with the notices, and a degradation marks the
+ *   enforced — never exit 2 on a grep error. The announcements
+ *   ride the user-visible channel with the notices, and a degradation marks the
  *   session so every later call in it keeps saying it — a degradation seen
  *   once is a degradation the session forgets;
  * - supports --selftest so the wiring can prove itself end to end: the branch
@@ -485,7 +485,7 @@ export function generateHook(policy: CompiledPolicy): string {
 
   const shList = (xs: readonly string[]): string => shQuote(xs.join(" "));
 
-  // Session state (degradation stickiness, D-008) lives beside the log: the
+  // Session state (degradation stickiness, docs/decisions.md, D-008) lives beside the log: the
   // hook writes machine-local state exactly when it writes a machine-local
   // log. A hook that must write nothing (a committed project hook, synthetic
   // runs, or the user turning the blocked-call log off) gets no state dir and
@@ -675,10 +675,9 @@ notice() {
 }
 
 # degrade REASON — a call herkos could not fully check. The line goes to
-# stderr as collected AND onto the heard channel with the notices: D-005's
-# finding (stderr at exit 0 reaches nobody) applies to degradation lines
-# exactly as it did to open-rule notices, and a degradation nobody sees is
-# enforcement silently off. It also marks the session, D-008: a degradation
+# stderr as collected AND onto the user-visible channel with the notices
+# (stderr at exit 0 reaches nobody, and a degradation nobody sees is
+# enforcement silently off). It also marks the session: a degradation
 # announced once and never again is a degradation the session forgets, so the
 # marker makes later calls in the same session keep announcing it. Best effort
 # at every step — a marker that cannot be written degrades to per-call
@@ -703,11 +702,11 @@ expire_markers() {
 }
 
 # flush_notices — put what herkos has to SAY on the harness's
-# non-blocking, user-visible channel: open-rule notices and, alongside them
-# since D-008, the DEGRADED and UNCOVERED lines. On Claude Code, stderr from a
+# non-blocking, user-visible channel: open-rule notices and, alongside them,
+# the DEGRADED and UNCOVERED lines. On Claude Code, stderr from a
 # hook that exits 0 goes to the debug log only — the model never sees it and
 # the user never opens it — so a JSON systemMessage on stdout is what makes
-# these heard; the alternatives all break the rules' own contracts
+# these visible; the alternatives all break the rules' own contracts
 # (permissionDecision deny and exit 2 block the call; allow bypasses the
 # permission prompt). The model stays blind either way: stated, not hidden.
 # Any other harness name (or none): stderr as collected, because only Claude
@@ -833,7 +832,7 @@ if [ "$AWK_RC" -ne 0 ] && [ -z "$PARSE_ERROR" ]; then
   PARSE_ERROR="the extractor exited $AWK_RC"
 fi
 
-# Sticky degradation, D-008: a session that already ran a call herkos could
+# Sticky degradation: a session that already ran a call herkos could
 # not check keeps saying so on every later call — announced BEFORE the rules
 # run, so even a call that ends blocked carries the line. The marker is keyed
 # to the session id, so a fresh session starts clean; this path only reads it,
@@ -866,7 +865,7 @@ if [ -n "$PARSE_ERROR" ]; then
   exit 0
 fi
 
-# The reader decoded a checked value lossily (D-008): non-ASCII as "?",
+# The reader decoded a checked value lossily: non-ASCII as "?",
 # control characters as spaces. What was decoded is still checked — an ASCII
 # pattern sees every ASCII stretch intact — but a rule naming the replaced
 # text would not match, and that is said rather than hidden. Not sticky and
@@ -884,8 +883,8 @@ fi
 # announcement on every call is how a guard gets muted — but the path-bearing
 # tools (Bash, the file tools; see PATH_BEARING_TOOLS) are deliberately NOT
 # muted: for them a clean parse that yields nothing readable is schema drift,
-# and it gets the same UNCOVERED line. On the heard channel the line is said
-# ONCE per session and tool (D-008), for the same noise reason; the stderr
+# and it gets the same UNCOVERED line. On the user-visible channel the line is
+# said ONCE per session and tool, for the same noise reason; the stderr
 # diagnostic stays on every call, and a hook with no state dir keeps UNCOVERED
 # on stderr only.
 if [ -z "$COMMAND_VALUES" ] && [ -z "$PATH_VALUES" ] && [ -n "$TOOL" ]; then
@@ -921,9 +920,8 @@ exit 0
  *
  * The silent-absence failure is the one that costs everything — a harness
  * upgrade, a hand-edited settings file or a policy edited without recompiling
- * leaves the user believing they are guarded while nothing is. The README used
- * to ask people to run `check` after upgrades; nobody does, so this says it
- * unasked, every session.
+ * leaves the user believing they are guarded while nothing is. Few people run
+ * `check` after an upgrade, so this says it unasked, every session.
  *
  * Dependency-free like the enforcement hook, and deliberately silent about
  * anything it cannot establish: it reports what it checked, never a guarantee.
@@ -1024,10 +1022,7 @@ function ownsCommand(command: string): boolean {
 
 /** Does this settings entry run one of the scripts herkos owns? */
 function isOurs(entry: SettingsHookEntry): boolean {
-  return (entry.hooks ?? []).some((h) => {
-    const c = h.command ?? "";
-    return commandRuns(c, hookPath()) || commandRuns(c, sessionStartHookPath());
-  });
+  return (entry.hooks ?? []).some((h) => ownsCommand(h.command ?? ""));
 }
 
 export const claudeCodeAdapter: HarnessAdapter = {
