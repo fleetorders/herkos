@@ -408,7 +408,7 @@
       "rule": "cloud-credentials",
       "benign": true,
       "knownRefusal": true,
-      "note": "the same search through the shell: the hook matches command text against the path fragments and cannot tell search text from a read, so it refuses — a documented, deliberate refusal (README, 'Proof against other spellings')",
+      "note": "the same search through the shell: the hook matches command text against the path fragments and cannot tell search text from a read, so it refuses — a documented, deliberate refusal (docs/bypass-corpus.md)",
       "payload": {
         "tool_name": "Bash",
         "tool_input": {
