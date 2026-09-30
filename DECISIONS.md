@@ -75,7 +75,7 @@ object on stdout (exit 0) when the invoking harness is Claude Code; on any
 other harness name (or none), the stderr line is the whole surface, as
 before. The stderr line is printed in both cases, as it is collected.
 
-**Why:** an independent review of a consumer repo's install pointed out that
+**Why:** a review of the hook's behaviour pointed out that
 stderr from a hook that exits 0 reaches only the harness debug log — the
 model never sees it and the user never opens it — so an open rule was
 announcing to nobody. Of the channels the hook protocol offers, every other
@@ -128,7 +128,7 @@ hyphen TERMINATES the forbidden spelling rather than continuing the token.
 And a pattern carrying non-ASCII text is warned against at validation: the
 hook's reader decodes payload text to ASCII, so such a pattern can never match.
 
-**Why:** an independent tier-1 review of a consumer repo's install measured
+**Why:** a review of the prefix matching measured
 that only whitespace- or EOL-terminated spellings were caught — `sh
 migrate-v2-reset.sh; echo done`, a pipe, a subshell-close, `bash -c` quoting
 all passed, because shell punctuation directly after the spelling did not
@@ -163,10 +163,10 @@ payload's `session_id`, until the session ends (markers expire after a week).
 An UNCOVERED tool reaches the user channel once per session and tool; its
 stderr diagnostic stays on every call. The catastrophic-class posture —
 `command-never` with hard-block disposition — STAYS fail-open-loud on
-unparseable payloads, per D-004: the tier-1 review argued for fail-closed
+unparseable payloads, per D-004: the review argued for fail-closed
 (one weird payload re-issued versus a live install's data), and that argument
-is recorded here rather than decided away — flipping it is the maintainer's
-call, and the sticky announcements are what make fail-open honest enough to
+is recorded here rather than decided away — flipping it is a deliberate
+change, and the sticky announcements are what make fail-open honest enough to
 revisit deliberately instead of urgently.
 
 **Why:** D-005's own verification showed stderr at exit 0 reaches nobody, and
