@@ -95,8 +95,9 @@ unrelated commands that happen to be adjacent.
 ### D-007 — Token boundaries are asymmetric, and patterns match ASCII only
 
 A prefix rule's compiled pattern starts with the boundary `(^|[^[:alnum:]_.-])` and ends
-with `([^[:alnum:]_-]|$)`: after the forbidden spelling, a dot or hyphen ends it instead of
-continuing it. A pattern containing non-ASCII text gets a warning from `validate`, because
+with `([^[:alnum:]_-]|$)`: before the spelling, a dot, hyphen or underscore continues the
+token; after it, only letters, digits, `_` and `-` continue it, and every other character
+(a dot, shell punctuation) ends it. A pattern containing non-ASCII text gets a warning from `validate`, because
 the hook's reader decodes payload text to ASCII and such a pattern can never match.
 
 **Why:** with whitespace as the only trailing boundary, `sh migrate-v2-reset.sh; echo
@@ -114,18 +115,20 @@ reader that decodes them makes the warning obsolete rather than breaking policie
 ### D-008 — Degradation is sticky and visible; the posture stays fail-open-loud
 
 Every degradation notice (awk missing, an unparseable payload, a rule pattern grep cannot
-evaluate, a value decoded lossily) uses the channel from D-005: `systemMessage` on Claude
-Code, stderr elsewhere. A degradation also marks the session: later calls in the same
-session (keyed by the payload's `session_id`) repeat the notice until the session ends;
-markers expire after a week. A tool whose arguments herkos cannot read (UNCOVERED) is
+evaluate) uses the channel from D-005: `systemMessage` on Claude Code, stderr elsewhere. A
+degradation also marks the session: later calls in the same session (keyed by the payload's
+`session_id`) repeat the notice until the session ends; markers expire after a week. A
+value decoded lossily (non-ASCII shown as `?`, some control characters as spaces) is
+reported on the call it happens on, over the same channel, and never marks the session. A tool whose arguments herkos cannot read (UNCOVERED) is
 reported on the user channel once per session and tool, and on stderr on every call.
 
 **Why:** a degradation the user sees once, on one call, is forgotten; a sticky marker makes
 the state follow the session. UNCOVERED is limited to once per session and tool because a
 line on every call to such a tool is noise, and noise gets a guard muted. A value that
-decodes lossily (non-ASCII characters dropped) is announced but still checked, because
-every ASCII pattern still sees the ASCII text intact; switching the whole call off over one
-non-ASCII character would give up real coverage for nothing.
+decodes lossily is announced but still checked, because every ASCII pattern still sees the
+ASCII text intact; switching the whole call off over one non-ASCII character would give up
+real coverage for nothing. It stays a per-call note because it is a fact about one value,
+not a state of the session.
 
 **Consequences:** session markers live beside the blocked-call log, so a hook that writes
 nothing (a committed project hook, or a user who turned the log off) announces on each call
