@@ -17,8 +17,8 @@ const { generateHook } = await import("../src/adapters/claude-code.js");
  * back to 64 after an escape). A UTF-8-aware awk given a window that ends
  * inside a multi-byte character aborted on the half character, and the hook
  * turned enforcement off for an ordinary command such as "a — b". The hook
- * runs awk under LC_ALL=C; these cases put the character across every window
- * boundary up to the third, with and without an escape shifting the windows,
+ * runs awk under LC_ALL=C; these cases put the character across the first two
+ * window ends, with and without an escape shifting the windows,
  * through the hook's own extractor line in a UTF-8 locale — so on an awk that
  * has the bug (macOS's) they fail if the hook stops setting the locale.
  */
@@ -34,13 +34,22 @@ const utf8: NodeJS.ProcessEnv = {
 const CHARS = ["é", "—", "😀"]; // 2, 3 and 4 bytes
 const PREFIXES = ["", 'x\\"']; // the second resets the window after 3 bytes
 
+// Where the character can straddle a window end: the first window is 64 bytes
+// and the second 128, so ends fall at bytes 64 and 192 of the scan — after the
+// value's opening quote, or after the escape, which the prefix places exactly
+// where the a's begin. A character only splits within 3 bytes of an end; the
+// cases cover 7 either side, and every other offset is plain text between.
+const OFFSETS = [64, 192].flatMap((end) =>
+  Array.from({ length: 15 }, (_, i) => end - 7 + i),
+);
+
 const extract = hookExtractor(script, utf8);
 
 describe("a multi-byte character across a scan-window boundary", () => {
-  it("is read whole at every offset, and the value comes out byte for byte", () => {
+  it("is read whole at every offset near a window end, and the value comes out byte for byte", () => {
     for (const prefix of PREFIXES) {
       for (const ch of CHARS) {
-        for (let n = 0; n <= 200; n++) {
+        for (const n of OFFSETS) {
           const raw = `${prefix}${"a".repeat(n)}${ch}b`;
           const payload = `{"tool_name":"Bash","tool_input":{"command":"${raw}"}}`;
           const lines = extract(payload);
