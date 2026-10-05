@@ -255,7 +255,7 @@ describe("policy validation", () => {
   });
 });
 
-describe("the .env templates are not refused (D-003: a false positive teaches users to disable the guard)", () => {
+describe("the .env templates are not refused (docs/decisions.md, D-003: a false positive teaches users to disable the guard)", () => {
   const scriptPath = writeHook(generateHook(compile(loadEffectivePolicy())));
 
   it("passes Read, Write and cat of every committed template spelling", () => {
@@ -305,8 +305,7 @@ describe("the .env templates are not refused (D-003: a false positive teaches us
       ).exit,
     ).toBe(2);
     // Ends with the template: the exclusion must mute only the template
-    // token, never the secret beside it in the same command. The whole-subject
-    // exclusion let this through (the whole-subject exclusion let this through).
+    // token, never the secret beside it in the same command.
     expect(
       fireHook(scriptPath, bashPayload("cat app/.env app/.env.example")).exit,
     ).toBe(2);
@@ -774,7 +773,7 @@ describe("wiring stamp and session-start proof", () => {
   });
 });
 
-describe("what a pattern can match is bounded by what the reader decodes (D-007)", () => {
+describe("what a pattern can match is bounded by what the reader decodes (docs/decisions.md, D-007)", () => {
   it("warns when a pattern carries non-ASCII — the hook decodes payload text to ASCII, so it can never match", () => {
     const cfgDir = fs.mkdtempSync(path.join(os.tmpdir(), "herkos-ascii-"));
     const prev = process.env.HERKOS_CONFIG;

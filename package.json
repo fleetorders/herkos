@@ -1,10 +1,10 @@
 {
   "name": "herkos",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Your never-list, enforced everywhere: block agents from reading credentials or running fetched code — one policy, compiled into every agent harness on your machine, in every mode.",
   "type": "module",
   "bin": {
-    "herkos": "./dist/cli.js"
+    "herkos": "dist/cli.js"
   },
   "main": "./dist/index.js",
   "files": [

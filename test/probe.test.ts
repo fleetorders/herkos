@@ -117,7 +117,7 @@ function stubAdapter(
     seen.push({ cwd: o.cwd, args: cmd.args });
     return behaviour({ workingDir: o.cwd });
   };
-  // Attach the runner via a closure the test passes in.
+  // The runner rides on the adapter as a test-only `_runner` property.
   (adapter as unknown as { _runner: ProbeRunner })._runner = runner;
   return { adapter, seen };
 }

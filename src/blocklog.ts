@@ -5,7 +5,8 @@
  * rule id and working directory — and never the command text, which can itself
  * carry a secret. Without it nothing records what was blocked: a user cannot
  * tell whether the guard ever fired, and nobody can see a rule firing on
- * legitimate work, which is the one signal the curation bar depends on. `status`
+ * legitimate work, which is the one signal for keeping the baseline free of
+ * false positives (docs/decisions.md, D-003). `status`
  * reads it back as per-rule counts and the most recent blocks.
  *
  * Reading is forgiving by design: the file is appended by a shell script that

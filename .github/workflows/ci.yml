@@ -4,6 +4,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     # macOS too: its awk is a target of its own (UTF-8 aware, unlike mawk and
@@ -19,6 +22,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: shellcheck (every tracked shell script)
+        if: runner.os == 'Linux'
+        run: git ls-files -z -- '*.sh' | xargs -0 -r shellcheck -S warning
       - run: npm run typecheck
       # Formatting is enforced by a local hook, so CI is its backstop: hooks are
       # skippable (--no-verify, a fresh clone before setup) and CI is not.

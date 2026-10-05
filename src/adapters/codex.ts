@@ -1,6 +1,6 @@
 /**
- * Codex CLI adapter (config surface verified against codex-cli 0.146.0 on
- * 2026-08-15). Codex enforces MORE of the never-list than a coarse sandbox:
+ * Codex CLI adapter (config surface verified on codex-cli 0.146.0 through 0.154.0).
+ * Codex enforces MORE of the never-list than a coarse sandbox:
  *
  * - Credential reads → a permission profile with OS-enforced filesystem `deny`
  *   entries (Seatbelt/Landlock). This is seamless (no trust step) and is
@@ -199,7 +199,7 @@ function parseVersion(
  * file — appended after the user's tables it silently lands inside the last
  * one, the profile is defined but never selected, and Codex refuses the
  * config ("defines [permissions] profiles but does not set
- * default_permissions"). Verified on codex-cli 0.154.0, 2026-09-11.
+ * default_permissions"). Observed on codex-cli 0.154.0.
  */
 const ROOT_MARK =
   "# >>> herkos managed root key (see the herkos block at the end) <<<";
@@ -234,10 +234,9 @@ const escapeRe = (s: string): string =>
 
 /**
  * Every managed block in the file, GLOBAL. The markers carry parentheses, so
- * they must be escaped before they become a regex: the unescaped form never
- * matched the real marker line, the block was never found again, and each
- * `init` appended one more copy until Codex refused the file ("duplicate
- * key"). Found on a live install 2026-09-11; idempotency is the adapter
+ * they must be escaped before they become a regex: unescaped, the pattern never
+ * matches the real marker line, and each `init` would append one more copy
+ * until Codex refuses the file ("duplicate key"). Idempotency is the adapter
  * contract (types.ts), so the block is stripped everywhere and written once.
  */
 const BLOCK_RE = new RegExp(

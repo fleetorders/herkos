@@ -39,7 +39,7 @@ const NO_RESET = {
   ],
 };
 
-describe("a prefix rule ends at shell punctuation, not just whitespace (D-007)", () => {
+describe("a prefix rule ends at shell punctuation, not just whitespace (docs/decisions.md, D-007)", () => {
   it.each([
     ["sh migrate-v2-reset.sh; echo done", "a semicolon follows the spelling"],
     ["bash -c 'migrate-v2-reset.sh'", "the spelling is quoted after -c"],
