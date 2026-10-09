@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { describe, it, expect, afterEach } from "vitest";
-import { call, isolateConfig, writeHook } from "./helpers.js";
+import { SPAWN_TIMEOUT_MS, call, isolateConfig, writeHook } from "./helpers.js";
 
 const cfg = isolateConfig();
 
@@ -26,7 +26,7 @@ function run(
   const r = spawnSync("sh", [script, ...(opts.args ?? [])], {
     input: payload,
     encoding: "utf8",
-    timeout: 10_000,
+    timeout: SPAWN_TIMEOUT_MS,
     cwd: opts.cwd,
   });
   return { exit: r.status ?? -1, stderr: r.stderr ?? "" };

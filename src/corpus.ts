@@ -25,6 +25,13 @@ import type { CompiledPolicy, EffectivePolicy } from "./policy.js";
 import type { LayerKind, RuleCoverage } from "./adapters/types.js";
 import { generateHook } from "./adapters/claude-code.js";
 
+// Firing the generated hook at a corpus case is capped so a HUNG hook fails
+// its case rather than hanging the corpus run — the cap is not a budget a
+// healthy hook spends. On a machine under load, spawn latency alone can pass
+// a tight cap, and the timeout then reads as the hook failing, so the ceiling
+// sits far above real spawn time instead.
+const SPAWN_TIMEOUT_MS = 60_000;
+
 export const LAYER_KINDS: readonly LayerKind[] = [
   "hook",
   "permission-deny",
@@ -111,7 +118,7 @@ export function runBypassCorpus(
       const r = spawnSync("sh", [script], {
         input: JSON.stringify(c.payload),
         encoding: "utf8",
-        timeout: 10_000,
+        timeout: SPAWN_TIMEOUT_MS,
       });
       const gotHook: CorpusResult["gotHook"] =
         r.status === 2 ? "block" : r.status === 0 ? "pass" : "error";

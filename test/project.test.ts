@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { call, fireHook, isolateConfig } from "./helpers.js";
+import { SPAWN_TIMEOUT_MS, call, fireHook, isolateConfig } from "./helpers.js";
 
 isolateConfig();
 
@@ -298,7 +298,7 @@ describe("wiring a repo's project policy", () => {
     const r = spawnSync("sh", ["-c", cmd], {
       input: call("Read", { file_path: "secrets/prod/db.json" }),
       encoding: "utf8",
-      timeout: 10_000,
+      timeout: SPAWN_TIMEOUT_MS,
       env: { ...process.env, CLAUDE_PROJECT_DIR: repo },
     });
     expect(r.status).toBe(0);
@@ -324,7 +324,7 @@ describe("wiring a repo's project policy", () => {
     const r = spawnSync("sh", ["-c", cmd], {
       input: call("Read", { file_path: "prod/deploy.conf" }),
       encoding: "utf8",
-      timeout: 10_000,
+      timeout: SPAWN_TIMEOUT_MS,
       env: { ...process.env, CLAUDE_PROJECT_DIR: repo },
     });
     expect(r.status).toBe(0);

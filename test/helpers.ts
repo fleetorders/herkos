@@ -24,6 +24,17 @@ export function writeHook(script: string): string {
   return f;
 }
 
+/**
+ * Wall-clock cap for every synthetic-payload spawn of the generated hook. The
+ * cap exists so a HUNG hook fails its test instead of hanging the suite — it
+ * is not a budget a healthy hook spends. Spawn latency alone (sh plus the
+ * hook, on a machine under load: a parallel CI fleet, a busy laptop) can
+ * exceed a tight cap, and the timeout then reads as the hook failing —
+ * wholesale, with a failure set that moves between runs. 60s keeps load
+ * spikes from masquerading as verdicts while still bounding a hang.
+ */
+export const SPAWN_TIMEOUT_MS = 60_000;
+
 /** Fire one synthetic tool-call payload through a hook script. */
 export function fireHook(
   scriptPath: string,
@@ -34,7 +45,7 @@ export function fireHook(
   const r = spawnSync("sh", [scriptPath, ...args], {
     input: payload,
     encoding: "utf8",
-    timeout: 10_000,
+    timeout: SPAWN_TIMEOUT_MS,
     env,
   });
   return {
@@ -82,7 +93,7 @@ export function hookExtractor(
     const r = spawnSync("sh", ["-c", command], {
       input: payload,
       encoding: "utf8",
-      timeout: 10_000,
+      timeout: SPAWN_TIMEOUT_MS,
       env: {
         ...env,
         PATH_KEYS: pkeys,

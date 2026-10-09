@@ -12,6 +12,7 @@ import {
 } from "../src/policy.js";
 import type { CompiledPolicy, EffectivePolicy, Rule } from "../src/policy.js";
 import { runSelfCheck, syntaxCheck } from "../src/selfcheck.js";
+import { SPAWN_TIMEOUT_MS } from "./helpers.js";
 import {
   generateHook,
   generateSessionStartHook,
@@ -40,7 +41,7 @@ function fireHook(
   const r = spawnSync("sh", [scriptPath], {
     input: payload,
     encoding: "utf8",
-    timeout: 10_000,
+    timeout: SPAWN_TIMEOUT_MS,
   });
   return { exit: r.status ?? -1, stderr: r.stderr ?? "" };
 }
@@ -711,7 +712,7 @@ describe("wiring stamp and session-start proof", () => {
       );
       const r = spawnSync("sh", [script], {
         encoding: "utf8",
-        timeout: 10_000,
+        timeout: SPAWN_TIMEOUT_MS,
       });
       return { exit: r.status ?? -1, out: (r.stdout ?? "") + (r.stderr ?? "") };
     } finally {
