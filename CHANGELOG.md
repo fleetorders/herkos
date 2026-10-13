@@ -1,5 +1,11 @@
 # herkos
 
+## 0.4.3
+
+### Patch Changes
+
+- 9266062: `herkos discover` now reports an unreadable policy file on stderr, like every other command. The generated hook's comments are plainer; regenerate with `herkos init` to pick them up (enforcement is unchanged).
+
 ## 0.4.2
 
 ### Patch Changes
