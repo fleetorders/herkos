@@ -345,6 +345,28 @@ describe("notPaths exclusions", () => {
     ).toBe(true);
   });
 
+  it("are refused when one would swallow the rule's own path fragment", () => {
+    const v = validatePolicy(ruleWith({ paths: ["/.env"], notPaths: ["."] }));
+    expect(
+      v.errors.some(
+        (e) =>
+          e.includes("test-rule") &&
+          e.includes("matches the rule's own path fragment"),
+      ),
+    ).toBe(true);
+  });
+
+  it("accept the baseline dotenv exclusion — it must not swallow the dotenv fragment", () => {
+    const dotenv = BASELINE.find((r) => r.id === "dotenv-files")!;
+    const v = validatePolicy({
+      rules: [dotenv],
+      disabled: [],
+      userPolicyPath: "/tmp/herkos-test-policy.json",
+      userPolicyLoaded: false,
+    });
+    expect(v.errors).toEqual([]);
+  });
+
   it("make the rule's own match examples honest — an excluded spelling is not matched", () => {
     const v = validatePolicy(
       ruleWith({

@@ -446,6 +446,34 @@ function readSettingsForWire(sp: string): {
   return { settings, existed: true };
 }
 
+/**
+ * Read the harness settings for READ-ONLY inspection (verify, unwire):
+ * absent, present-but-unreadable (with the reason), or parsed. The settings
+ * file is the one the user hand-edits most; a corrupted copy is a diagnosis
+ * ("not valid JSON"), never a stack trace out of status/uninstall.
+ */
+function readSettingsForRead(
+  sp: string,
+):
+  | { kind: "absent" }
+  | { kind: "broken"; reason: string }
+  | { kind: "ok"; settings: Record<string, unknown> } {
+  if (!fs.existsSync(sp)) return { kind: "absent" };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(sp, "utf8"));
+  } catch (e) {
+    return { kind: "broken", reason: String((e as Error).message) };
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return {
+      kind: "broken",
+      reason: `holds ${describeValue(parsed)}, not a JSON object`,
+    };
+  }
+  return { kind: "ok", settings: parsed as Record<string, unknown> };
+}
+
 export function detectConfigDir(): string {
   return process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
 }
@@ -1294,11 +1322,17 @@ export const claudeCodeAdapter: HarnessAdapter = {
   unwire(): WireResult {
     const changed: string[] = [];
     const sp = settingsPath(detectConfigDir());
-    if (fs.existsSync(sp)) {
-      const settings = JSON.parse(fs.readFileSync(sp, "utf8")) as Record<
-        string,
-        unknown
-      >;
+    let settingsNote = "";
+    const read = readSettingsForRead(sp);
+    if (read.kind === "broken") {
+      // "Adapters are reversible" must survive a corrupted settings file: the
+      // hook file, the snapshot and the ownership record are hers and come out
+      // whatever the settings say; the settings themselves cannot be cleaned
+      // until the user fixes the file, so that is said, not thrown.
+      settingsNote = ` — could not clean ${sp} (not valid JSON: ${read.reason}); fix or remove it and re-run 'herkos uninstall' to finish`;
+    }
+    if (read.kind === "ok") {
+      const settings = read.settings;
       const hooks = (settings["hooks"] ?? {}) as Record<
         string,
         SettingsHookEntry[]
@@ -1372,7 +1406,9 @@ export const claudeCodeAdapter: HarnessAdapter = {
     }
     return {
       changed,
-      detail: changed.length ? "herkos wiring removed" : "nothing to remove",
+      detail:
+        (changed.length ? "herkos wiring removed" : "nothing to remove") +
+        settingsNote,
     };
   },
 
@@ -1469,13 +1505,18 @@ export const claudeCodeAdapter: HarnessAdapter = {
       };
     }
     const sp = settingsPath(detectConfigDir());
-    if (!fs.existsSync(sp)) {
+    const read = readSettingsForRead(sp);
+    if (read.kind === "absent") {
       return { ok: false, detail: `harness settings not found at ${sp}` };
     }
-    const settings = JSON.parse(fs.readFileSync(sp, "utf8")) as Record<
-      string,
-      unknown
-    >;
+    if (read.kind === "broken") {
+      return {
+        ok: false,
+        state: "broken",
+        detail: `${sp} is not valid JSON (${read.reason}) — herkos cannot verify the wiring; fix or remove the file, then re-run 'herkos status'`,
+      };
+    }
+    const settings = read.settings;
     const hooks = (settings["hooks"] ?? {}) as Record<
       string,
       SettingsHookEntry[]

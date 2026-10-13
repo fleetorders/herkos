@@ -790,6 +790,26 @@ export function validatePolicy(policy: EffectivePolicy): ValidationResult {
     checkEntries(rid, "commandPatterns", rule.commandPatterns, errors);
     checkEntries(rid, "codexDeny", rule.codexDeny, errors);
     checkEntries(rid, "denyRead", rule.denyRead, errors);
+    // An exclusion that swallows the rule's own fragment disables the rule for
+    // every subject that fragment matches — `notPaths: ["."]` would pass every
+    // other check and silently turn the rule off. The fragment itself is the
+    // canonical subject the exclusion must leave matchable.
+    if (errors.length === beforeMatchers) {
+      const frags = (rule.paths ?? []).filter(
+        (x): x is string => typeof x === "string" && x.length > 0,
+      );
+      for (const np of (rule.notPaths ?? []).filter(
+        (x): x is string => typeof x === "string" && x.length > 0,
+      )) {
+        for (const frag of frags) {
+          if (grepMatches(np, frag)) {
+            errors.push(
+              `rule ${rid}: notPaths entry ${JSON.stringify(np)} matches the rule's own path fragment ${JSON.stringify(frag)} — it would disable the rule for every subject that fragment matches`,
+            );
+          }
+        }
+      }
+    }
     // Examples only mean something once the rule's own matchers are valid.
     if (errors.length === beforeMatchers) checkExamples(rid, rule, errors);
     // Unknown keys only matter for user rules — the baseline is ours.
