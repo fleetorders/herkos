@@ -356,6 +356,18 @@ describe("notPaths exclusions", () => {
     ).toBe(true);
   });
 
+  it("accept a narrow exclusion anchored to the bare fragment — it does not swallow the rule", () => {
+    // `paths: ["secrets/"]` with `notPaths: ["/$"]` allows `ls secrets/`
+    // while `cat secrets/prod/db.json` still blocks: at run time the
+    // exclusion applies per token to full paths, so matching the bare
+    // fragment text kills only that spelling. Testing the exclusion against
+    // the bare fragment refused this policy and `init` wrote nothing.
+    const v = validatePolicy(
+      ruleWith({ paths: ["secrets/"], notPaths: ["/$"] }),
+    );
+    expect(v.errors).toEqual([]);
+  });
+
   it("accept the baseline dotenv exclusion — it must not swallow the dotenv fragment", () => {
     const dotenv = BASELINE.find((r) => r.id === "dotenv-files")!;
     const v = validatePolicy({

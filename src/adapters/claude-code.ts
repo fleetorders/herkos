@@ -97,8 +97,13 @@ function isRunnerArgument(word: string): boolean {
  * treating it as a boundary claimed `hook-claude-code.sh~`, and uninstall
  * silently removed a registration that was never herkos's.
  *
- * Quotes are stripped first, backslash included (the `"…\"…"` of a
- * serialized hooks file), so `"$HOME"/.config/…` and `${HOME}"/…` count as
+ * Words are split on whitespace OUTSIDE quotes first, then each word's
+ * quotes are stripped, backslash included (the `"…\"…"` of a serialized
+ * hooks file): a quoted path containing a space — the spelling `wire`
+ * itself writes for a home like `/Users/John Doe` — stays ONE word, where
+ * stripping the quotes before splitting tore it in two and the registration
+ * was never recognised again (`status` said NOT wired, every later `init`
+ * piled on another). `"$HOME"/.config/…` and `${HOME}"/…` still count as
  * the spelling they expand to: an unmatched quote-split spelling is the
  * double registration 0.4.1 fixed, in its quoted form. Command lists,
  * pipelines and subshells split into segments checked independently, so
@@ -111,15 +116,39 @@ function isRunnerArgument(word: string): boolean {
  * a wrapper merely names it) or a user's entry removed on unwire —
  * precision wins.
  */
+/** One segment's words, split on space/tab OUTSIDE single or double quotes;
+ * the words still carry their quotes, for the caller to strip. */
+function splitSegmentWords(segment: string): string[] {
+  const words: string[] = [];
+  let cur = "";
+  let quote: string | null = null;
+  for (const ch of segment) {
+    if (quote !== null) {
+      cur += ch;
+      if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") {
+      cur += ch;
+      quote = ch;
+    } else if (ch === " " || ch === "\t") {
+      if (cur !== "") words.push(cur);
+      cur = "";
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur !== "") words.push(cur);
+  return words;
+}
+
 export function commandRuns(command: string, abs: string): boolean {
   const pathChar = /[A-Za-z0-9._\-/~]/;
   // A JSON-escaped quote carries its backslash; both go together, or the
   // bare path that remains never matches a spelling.
-  const flat = command.replace(/\\?['"]/g, "");
+  const strip = (word: string) => word.replace(/\\?['"]/g, "");
   return pathSpellings(abs).some((s) =>
-    flat.split(/[\n;&|()]+/).some((segment) =>
-      segment
-        .split(/[ \t]+/)
+    command.split(/[\n;&|()]+/).some((segment) =>
+      splitSegmentWords(segment)
+        .map(strip)
         .filter(Boolean)
         .some((word, i, words) => {
           const claims =
@@ -703,8 +732,14 @@ log_block() {
 
 # remaining_tokens SUBJECT EXCLUDE — the subject with every token EXCLUDE
 # matches removed, one grep per kept-or-dropped token. Tokens are split on
-# space and tab regardless of the caller's IFS; the callers run under set -f,
-# so no token is pathname-expanded. The ONE owner of the exclusion's
+# space and tab regardless of the caller's IFS, with pathname expansion OFF
+# for the split: a token like 'src/*' is a literal for grep, never the file
+# names that happen to sit beside the caller. The helper owns that switch
+# itself — the selftest branch runs long before the runtime's own set -f,
+# and there the example's glob expanded against the user's working directory,
+# failing the selftest on rules that block correctly at run time. No caller
+# can forget it now; and every caller runs the helper in $( ), a subshell the
+# switch cannot leak out of. The ONE owner of the exclusion's
 # token-removal semantics: enforce, notice and the selftest's st_one all ask
 # it what is left, so none of the three can drift from the others (each once
 # carried its own copy of the loop, and st_one's copy had already drifted to
@@ -712,6 +747,7 @@ log_block() {
 remaining_tokens() {
   oIFS=$IFS
   IFS=" $TAB"
+  set -f
   for tok in $1; do
     printf '%s' "$tok" | grep -Eq -e "$2" 2>/dev/null || printf '%s ' "$tok"
   done

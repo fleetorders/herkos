@@ -792,8 +792,14 @@ export function validatePolicy(policy: EffectivePolicy): ValidationResult {
     checkEntries(rid, "denyRead", rule.denyRead, errors);
     // An exclusion that swallows the rule's own fragment disables the rule for
     // every subject that fragment matches — `notPaths: ["."]` would pass every
-    // other check and silently turn the rule off. The fragment itself is the
-    // canonical subject the exclusion must leave matchable.
+    // other check and silently turn the rule off. The probe is a token that
+    // merely CONTAINS the fragment, not the bare fragment text: exclusions
+    // apply per token at run time, and a narrow one may legitimately match the
+    // bare fragment itself (`paths: ["secrets/"]` with `notPaths: ["/$"]`
+    // allows `ls secrets/` while `cat secrets/prod/db.json` still blocks) —
+    // testing the bare text refused that policy and `init` wrote nothing. An
+    // exclusion matching the embedded probe matches fragment-bearing tokens
+    // generally, which is the disabling shape.
     if (errors.length === beforeMatchers) {
       const frags = (rule.paths ?? []).filter(
         (x): x is string => typeof x === "string" && x.length > 0,
@@ -802,9 +808,9 @@ export function validatePolicy(policy: EffectivePolicy): ValidationResult {
         (x): x is string => typeof x === "string" && x.length > 0,
       )) {
         for (const frag of frags) {
-          if (grepMatches(np, frag)) {
+          if (grepMatches(np, `x/${frag}x`)) {
             errors.push(
-              `rule ${rid}: notPaths entry ${JSON.stringify(np)} matches the rule's own path fragment ${JSON.stringify(frag)} — it would disable the rule for every subject that fragment matches`,
+              `rule ${rid}: notPaths entry ${JSON.stringify(np)} matches the rule's own path fragment ${JSON.stringify(frag)} in a token that merely contains it — it would disable the rule for every subject that fragment matches`,
             );
           }
         }

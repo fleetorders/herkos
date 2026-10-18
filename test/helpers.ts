@@ -41,12 +41,14 @@ export function fireHook(
   payload: string,
   env: NodeJS.ProcessEnv = process.env,
   args: string[] = [],
+  cwd?: string,
 ): { exit: number; stderr: string; stdout: string } {
   const r = spawnSync("sh", [scriptPath, ...args], {
     input: payload,
     encoding: "utf8",
     timeout: SPAWN_TIMEOUT_MS,
     env,
+    ...(cwd !== undefined ? { cwd } : {}),
   });
   return {
     exit: r.status ?? -1,

@@ -260,8 +260,14 @@ const OWN_TABLE_RE = new RegExp(`^\\s*\\[permissions\\.${PROFILE}(\\]|\\.)`);
  * came back as an unterminated string Codex cannot load.
  * The scan alternates open/close from the left as a parser would: outside a
  * string the first `"""`/`'''` opens one, inside it only the SAME delimiter
- * closes it (the other is content). Escapes are not tracked — no line herkos
- * writes carries one, and a hand-written `\"""` is out of scope.
+ * closes it (the other is content). Outside a multiline string the scan also
+ * walks OVER one-line strings and stops at a `#` comment: a triple quote
+ * inside either (`# tip: ''' opens a literal`, `s = 'a """ b'`) is content,
+ * not an opener — treated as one, it marked every line below unstructural,
+ * an orphaned herkos table rode through cleanup, and wire wrote the table a
+ * second time with no refusal. `\"` inside a one-line BASIC string is
+ * honoured (a backslash-escaped quote would end the string early); a
+ * hand-written `\"""` outside that shape is out of scope.
  */
 function structuralLineMap(lines: string[]): boolean[] {
   const structural: boolean[] = [];
@@ -269,20 +275,36 @@ function structuralLineMap(lines: string[]): boolean[] {
   for (const line of lines) {
     structural.push(open === null);
     let rest = line;
-    while (rest !== "") {
-      if (open === null) {
-        const a = rest.indexOf('"""');
-        const b = rest.indexOf("'''");
-        const at = a === -1 ? b : b === -1 ? a : Math.min(a, b);
-        if (at === -1) break;
-        open = rest.slice(at, at + 3);
-        rest = rest.slice(at + 3);
-      } else {
+    scan: while (rest !== "") {
+      if (open !== null) {
         const at = rest.indexOf(open);
         if (at === -1) break;
         rest = rest.slice(at + 3);
         open = null;
+        continue;
       }
+      for (let i = 0; i < rest.length; i++) {
+        const c = rest[i]!;
+        // Outside a string a `#` starts a comment: the rest of the line is
+        // text, whatever quotes it carries.
+        if (c === "#") break scan;
+        if (c !== '"' && c !== "'") continue;
+        if (rest[i + 1] === c && rest[i + 2] === c) {
+          open = c.repeat(3);
+          rest = rest.slice(i + 3);
+          continue scan;
+        }
+        // One-line string: walk to its close, honouring `\"` in a basic one.
+        let j = i + 1;
+        while (j < rest.length && rest[j] !== c) {
+          if (c === '"' && rest[j] === "\\") j++;
+          j++;
+        }
+        // Unterminated: malformed TOML either way — stop at end of line.
+        if (j >= rest.length) break scan;
+        i = j;
+      }
+      break;
     }
   }
   return structural;

@@ -238,6 +238,32 @@ describe("re-running init over an earlier install", () => {
     expect(out).toContain('[projects."/work/a"]');
   });
 
+  it("Codex: a triple quote inside a comment or one-line string is content, not an opener", () => {
+    // Read as an opener, the comment's `'''` marked every line below
+    // unstructural: the orphaned [permissions.herkos] rode through cleanup
+    // and wire wrote the table a second time, with no refusal — a config
+    // Codex refuses to load.
+    const cfg = path.join(process.env.CODEX_HOME!, "config.toml");
+    fs.writeFileSync(
+      cfg,
+      "# tip: ''' opens a literal multiline string\n" +
+        's = \'a """ b\'\n' +
+        "[permissions.herkos]\n" +
+        'extends = ":workspace"\n' +
+        "\n" +
+        "[other]\n" +
+        "x = 1\n",
+    );
+    codexAdapter.wire(compile(loadEffectivePolicy()));
+    const out = fs.readFileSync(cfg, "utf8");
+    expect(out.match(/^\[permissions\.herkos\]$/gm)).toHaveLength(1);
+    // The comment and the one-line string ride through untouched, and the
+    // table after the orphan bounds it exactly.
+    expect(out).toContain("# tip: ''' opens a literal multiline string");
+    expect(out).toContain('s = \'a """ b\'');
+    expect(out).toContain("[other]");
+  });
+
   it("Codex: refuses a herkos table in a spelling it does not rewrite, writing nothing", () => {
     const cfg = path.join(process.env.CODEX_HOME!, "config.toml");
     const before = '[permissions."herkos"]\nextends = ":workspace"\n';
@@ -284,6 +310,25 @@ describe("re-running init over an earlier install", () => {
     // The ~-spelling of our own path is still ours, marker or not.
     expect(commandRuns("sh ~/.config/herkos/hook-claude-code.sh", abs)).toBe(
       true,
+    );
+  });
+
+  it("recognises the registration wire itself writes when the path contains a space", () => {
+    // `wire` registers `sh "<abs>" --harness claude-code`, quoted — and a
+    // home directory like `/Users/John Doe` put a space inside the quotes.
+    // Stripping the quotes BEFORE splitting tore the path in two, `status`
+    // said NOT wired, and every later `init` added another registration.
+    const spaced = "/Users/John Doe/.config/herkos/hook-claude-code.sh";
+    expect(commandRuns(`sh "${spaced}" --harness claude-code`, spaced)).toBe(
+      true,
+    );
+    // The boundary rules hold inside a quoted path: someone else's file is
+    // still not ours.
+    expect(commandRuns(`sh "${spaced}.backup"`, spaced)).toBe(false);
+    expect(commandRuns(`sh "/mirror${spaced}"`, spaced)).toBe(false);
+    // Unquoted, a spaced path is not even one word — nothing to claim.
+    expect(commandRuns(`sh ${spaced} --harness claude-code`, spaced)).toBe(
+      false,
     );
   });
 

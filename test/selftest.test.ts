@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, afterEach } from "vitest";
 import { fireHook, isolateConfig, writeHook } from "./helpers.js";
@@ -117,6 +118,37 @@ describe("--selftest asserts the baked rules against their policy examples", () 
     const r = selftest(hookFrom(compiled));
     expect(r.exit).toBe(0);
     expect(r.stderr).not.toContain("the rule exclusion covers it");
+  });
+
+  it("splits an example's tokens without pathname expansion — the caller's directory cannot answer the grep", () => {
+    // The selftest branch runs before the runtime's own `set -f`, and the
+    // shared helper used to rely on the caller for noglob: an example like
+    // `cat secrets/*` expanded against the directory `herkos check` ran in,
+    // the exclusion then removed the expanded file name, and the selftest
+    // FAILED with "drifted" on a rule the runtime hook blocks correctly.
+    const compiled = compile(loadEffectivePolicy());
+    const tampered = {
+      ...compiled,
+      rules: compiled.rules.map((r) =>
+        r.id === "ssh-private-keys"
+          ? {
+              ...r,
+              pathRegex: "secrets/",
+              notPathRegex: "\\.example$",
+              match: ["cat secrets/*"],
+              notMatch: [],
+            }
+          : r,
+      ),
+    };
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "herkos-glob-"));
+    fs.mkdirSync(path.join(cwd, "secrets"));
+    fs.writeFileSync(path.join(cwd, "secrets", "a.example"), "x");
+    const script = writeHook(generateHook({ ...tampered, logFile: "" }));
+    const r = fireHook(script, "", process.env, ["--selftest"], cwd);
+    expect(r.exit).toBe(0);
+    expect(r.stderr).not.toContain("drifted");
+    fs.rmSync(cwd, { recursive: true, force: true });
   });
 
   it("bakes ONE token-removal loop — enforce, notice and st_one share remaining_tokens", () => {
