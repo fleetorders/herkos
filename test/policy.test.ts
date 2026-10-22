@@ -14,6 +14,7 @@ import type { CompiledPolicy, EffectivePolicy, Rule } from "../src/policy.js";
 import { runSelfCheck, syntaxCheck } from "../src/selfcheck.js";
 import {
   generateHook,
+  pathSpellings,
   generateSessionStartHook,
   readInstalledStamp,
   stampOf,
@@ -735,6 +736,69 @@ describe("wiring stamp and session-start proof", () => {
     });
     expect(r.exit).toBe(0);
     expect(r.out).toContain("not registered");
+  });
+
+  // A settings file registers the hook in whatever spelling wired it — early
+  // releases and hand-made entries say `sh "$HOME/.config/herkos/..."`. The
+  // proof must count that as wired, or it says NOT wired on every session
+  // start of a machine that is in fact enforced.
+  it("counts a hook registered as $HOME/... as wired", () => {
+    const prevHome = process.env.HOME;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "herkos-ss-"));
+    const prevCfg = process.env.HERKOS_CONFIG;
+    process.env.HERKOS_CONFIG = dir;
+    process.env.HOME = path.dirname(dir);
+    try {
+      const hook = path.join(dir, "hook-claude-code.sh");
+      const settings = path.join(dir, "settings.json");
+      const policy = path.join(dir, "policy.json");
+      const snapshot = path.join(dir, "policy.snapshot");
+      fs.writeFileSync(hook, generateHook(compiled), { mode: 0o755 });
+      fs.writeFileSync(policy, "{}");
+      fs.writeFileSync(snapshot, "{}");
+      const rest = hook.slice(path.dirname(dir).length);
+      expect(pathSpellings(hook)).toContain(`$HOME${rest}`);
+      fs.writeFileSync(
+        settings,
+        JSON.stringify({
+          hooks: {
+            PreToolUse: [
+              {
+                hooks: [
+                  {
+                    type: "command",
+                    command: `sh "$HOME${rest}" --harness claude-code`,
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      );
+      const script = path.join(dir, "session.sh");
+      fs.writeFileSync(
+        script,
+        generateSessionStartHook(
+          { ...compiled, userPolicyPath: policy },
+          "Claude Code",
+          settings,
+        ),
+        { mode: 0o755 },
+      );
+      const r = spawnSync("sh", [script], {
+        encoding: "utf8",
+        timeout: 10_000,
+      });
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain("enforced on Claude Code");
+      expect(r.stdout).not.toContain("NOT wired");
+    } finally {
+      if (prevCfg === undefined) delete process.env.HERKOS_CONFIG;
+      else process.env.HERKOS_CONFIG = prevCfg;
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("says DRIFT when the installed hook reports a different stamp", () => {
