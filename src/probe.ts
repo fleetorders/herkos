@@ -17,6 +17,16 @@
  * The fetched-exec probe names an unreachable host and is blocked by the hook
  * BEFORE anything is fetched, so no real download happens whether or not the
  * guard holds.
+ *
+ * HONEST ABOUT SCOPE, in both directions. The headless mode the probe runs in
+ * grants the agent full tool access for that one turn — the decoy bounds what
+ * it is ASKED to do, not what it can do; the spend ceiling and the timeout
+ * bound cost and time, not reach. And the decoy's throwaway directory means
+ * the probe measures the HOOK layer specifically: the home-anchored native
+ * layers (Claude Code's deny rules and OS sandbox, Codex's permission
+ * profile) do not see a path under the home directory, so a blocked verdict
+ * proves the hook fired end to end, and those layers are credited by
+ * `herkos check` instead.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -271,7 +281,7 @@ export function runLiveProbe(
       harness: adapter.name,
       ran: true,
       outcomes,
-      note: `probed the installed wiring · ceiling: ${ceilingNote}`,
+      note: `measured the HOOK layer end to end (the decoy sits in a throwaway directory, so home-anchored native layers — deny rules, the OS sandbox, Codex's permission profile — are not what this run exercises; 'herkos check' credits those where wired) · ceiling: ${ceilingNote}`,
     });
   }
   return reports;

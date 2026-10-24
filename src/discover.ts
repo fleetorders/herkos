@@ -41,7 +41,11 @@ export interface Candidate {
  * The catalogue. Generic, credential-shaped locations that are NOT in the
  * baseline (the baseline already covers SSH keys, cloud credentials, kube
  * config, .env files, .netrc/.npmrc/.pypirc, GnuPG, Docker and the keychain).
- * Grown by convention, never from any real machine's contents.
+ * Two candidates (`gcloud-adc`, `pypirc-home`) name files a baseline rule
+ * already covers while it is enabled — they exist for the case where the user
+ * disabled that rule, which is a sanctioned, per-id action; they are offered
+ * exactly then, and never while the covering rule holds. Grown by convention,
+ * never from any real machine's contents.
  */
 export const CANDIDATES: Candidate[] = [
   {
@@ -216,17 +220,21 @@ export const CANDIDATES: Candidate[] = [
 
 /**
  * Is a candidate already covered by an effective rule? Reuses the hook's own
- * substring semantics: a rule with a path fragment F covers this candidate when
- * F appears in one of the candidate's own path fragments (so the baseline
- * `.pypirc` covers the `.pypirc` candidate), or the candidate id is already a
- * rule id.
+ * substring semantics, in the one sound direction: a rule with a path
+ * fragment F covers the candidate when F appears INSIDE one of the
+ * candidate's own path fragments — every path the candidate would match also
+ * contains F, so the rule already blocks it (the baseline `.pypirc` covers
+ * the `.pypirc` candidate). The reverse — the rule's fragment containing the
+ * candidate's — proves nothing: such a rule is NARROWER than the candidate,
+ * protecting one specific spelling while the candidate's other paths and
+ * siblings stay open. The candidate id already being a rule id also counts.
  */
 function isCovered(candidate: Candidate, effective: EffectivePolicy): boolean {
   if (effective.rules.some((r) => r.id === candidate.rule.id)) return true;
   const mine = candidate.rule.paths ?? [];
   for (const r of effective.rules) {
     for (const frag of r.paths ?? []) {
-      if (mine.some((m) => m.includes(frag) || frag.includes(m))) return true;
+      if (mine.some((m) => m.includes(frag))) return true;
     }
   }
   return false;

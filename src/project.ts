@@ -53,8 +53,14 @@ const HOOK_REL = ".claude/hooks/herkos-project.sh";
 // the opposite of the hook body's own degrade-to-allow design), while a
 // deliberate exit-2 block from inside the hook still propagates; and
 // --harness names the caller, so an open rule's notice picks its channel and a
-// block is attributed in the blocked-call log.
-const HOOK_COMMAND = `{ test -f "$CLAUDE_PROJECT_DIR/${HOOK_REL}" && test -r "$CLAUDE_PROJECT_DIR/${HOOK_REL}"; } || { printf 'herkos DEGRADED: project hook not readable — enforcement OFF for this call.\\n' >&2; exit 0; }; sh "$CLAUDE_PROJECT_DIR/${HOOK_REL}" --harness claude-code`;
+// block is attributed in the blocked-call log. The fallback announces itself
+// on the HEARD channel too: this is an exit-0 path, where stderr reaches only
+// the debug log on Claude Code (D-005) — the one case with enforcement
+// entirely off is not told to nobody — so it also prints the JSON
+// systemMessage on stdout, the channel the hook body's flush_notices verified
+// for non-blocking exits. The wiring lives in Claude Code's own settings, so
+// no other harness ever runs it.
+const HOOK_COMMAND = `{ test -f "$CLAUDE_PROJECT_DIR/${HOOK_REL}" && test -r "$CLAUDE_PROJECT_DIR/${HOOK_REL}"; } || { printf 'herkos DEGRADED: project hook not readable — enforcement OFF for this call.\\n' >&2; printf '{"systemMessage":"herkos DEGRADED: project hook not readable — enforcement OFF for this call."}\\n'; exit 0; }; sh "$CLAUDE_PROJECT_DIR/${HOOK_REL}" --harness claude-code`;
 
 export function projectHookPath(repoRoot: string): string {
   return path.join(repoRoot, HOOK_REL);

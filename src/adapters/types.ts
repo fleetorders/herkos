@@ -40,10 +40,12 @@ export interface VerifyResult {
   /**
    * Which of three distinct situations this is, so callers can label them
    * apart: "unwired" (nothing is enforced), "stale" (wiring is present and
-   * enforcing an OLDER policy than the one on disk), "ok" (current). Absent
-   * means the adapter reports only ok/not — treat as "ok" or "unwired".
+   * enforcing an OLDER policy than the one on disk), "broken" (the harness
+   * settings cannot be read at all, so wiring is unknowable — a diagnosis,
+   * never a stack trace), "ok" (current). Absent means the adapter reports
+   * only ok/not — treat as "ok" or "unwired".
    */
-  state?: "ok" | "stale" | "unwired";
+  state?: "ok" | "stale" | "unwired" | "broken";
   detail: string;
 }
 

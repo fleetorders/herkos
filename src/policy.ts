@@ -261,7 +261,15 @@ export const BASELINE: Rule[] = [
     notPaths: ["\\.env\\.(example|sample|template|dist)$"],
     codexDeny: DOTENV_DENY,
     denyRead: DOTENV_DENY,
-    match: ["cat ./.env", "Read app/.env.production"],
+    // The mixed example pins the exclusion's token semantics in the wiring's
+    // own proof: a real .env beside an excluded template spelling still fires
+    // (selfcheck blocks this exact command at run time; the selftest must
+    // agree, not call the whole subject covered).
+    match: [
+      "cat ./.env",
+      "Read app/.env.production",
+      "cat app/.env app/.env.example",
+    ],
     notMatch: ["Read app/.env.example", "echo $ENV_FILE"],
   },
   {
@@ -782,6 +790,32 @@ export function validatePolicy(policy: EffectivePolicy): ValidationResult {
     checkEntries(rid, "commandPatterns", rule.commandPatterns, errors);
     checkEntries(rid, "codexDeny", rule.codexDeny, errors);
     checkEntries(rid, "denyRead", rule.denyRead, errors);
+    // An exclusion that swallows the rule's own fragment disables the rule for
+    // every subject that fragment matches — `notPaths: ["."]` would pass every
+    // other check and silently turn the rule off. The probe is a token that
+    // merely CONTAINS the fragment, not the bare fragment text: exclusions
+    // apply per token at run time, and a narrow one may legitimately match the
+    // bare fragment itself (`paths: ["secrets/"]` with `notPaths: ["/$"]`
+    // allows `ls secrets/` while `cat secrets/prod/db.json` still blocks) —
+    // testing the bare text refused that policy and `init` wrote nothing. An
+    // exclusion matching the embedded probe matches fragment-bearing tokens
+    // generally, which is the disabling shape.
+    if (errors.length === beforeMatchers) {
+      const frags = (rule.paths ?? []).filter(
+        (x): x is string => typeof x === "string" && x.length > 0,
+      );
+      for (const np of (rule.notPaths ?? []).filter(
+        (x): x is string => typeof x === "string" && x.length > 0,
+      )) {
+        for (const frag of frags) {
+          if (grepMatches(np, `x/${frag}x`)) {
+            errors.push(
+              `rule ${rid}: notPaths entry ${JSON.stringify(np)} matches the rule's own path fragment ${JSON.stringify(frag)} in a token that merely contains it — it would disable the rule for every subject that fragment matches`,
+            );
+          }
+        }
+      }
+    }
     // Examples only mean something once the rule's own matchers are valid.
     if (errors.length === beforeMatchers) checkExamples(rid, rule, errors);
     // Unknown keys only matter for user rules — the baseline is ours.

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, afterEach } from "vitest";
 import { fireHook, isolateConfig, writeHook } from "./helpers.js";
@@ -102,6 +103,66 @@ describe("--selftest asserts the baked rules against their policy examples", () 
     expect(dotenv.notMatch).toContain("Read app/.env.example");
     const r = selftest(hookFrom(compiled));
     expect(r.exit).toBe(0);
+  });
+
+  it("verifies a mixed exclusion example — a real target beside an excluded spelling still fires", () => {
+    // st_one used to apply the exclusion whole-subject: an example that
+    // merely CONTAINED an excluded spelling read as covered, so the selftest
+    // FAILED with "the rule exclusion covers it" on the very case enforce
+    // blocks at run time (selfcheck pins `cat ./app/.env ./app/.env.example`
+    // → exit 2). The baseline now carries that mixed example as a match, so
+    // the policy itself pins the token-removal semantics.
+    const compiled = compile(loadEffectivePolicy());
+    const dotenv = compiled.rules.find((r) => r.id === "dotenv-files")!;
+    expect(dotenv.match).toContain("cat app/.env app/.env.example");
+    const r = selftest(hookFrom(compiled));
+    expect(r.exit).toBe(0);
+    expect(r.stderr).not.toContain("the rule exclusion covers it");
+  });
+
+  it("splits an example's tokens without pathname expansion — the caller's directory cannot answer the grep", () => {
+    // The selftest branch runs before the runtime's own `set -f`, and the
+    // shared helper used to rely on the caller for noglob: an example like
+    // `cat secrets/*` expanded against the directory `herkos check` ran in,
+    // the exclusion then removed the expanded file name, and the selftest
+    // FAILED with "drifted" on a rule the runtime hook blocks correctly.
+    const compiled = compile(loadEffectivePolicy());
+    const tampered = {
+      ...compiled,
+      rules: compiled.rules.map((r) =>
+        r.id === "ssh-private-keys"
+          ? {
+              ...r,
+              pathRegex: "secrets/",
+              notPathRegex: "\\.example$",
+              match: ["cat secrets/*"],
+              notMatch: [],
+            }
+          : r,
+      ),
+    };
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "herkos-glob-"));
+    fs.mkdirSync(path.join(cwd, "secrets"));
+    fs.writeFileSync(path.join(cwd, "secrets", "a.example"), "x");
+    const script = writeHook(generateHook({ ...tampered, logFile: "" }));
+    const r = fireHook(script, "", process.env, ["--selftest"], cwd);
+    expect(r.exit).toBe(0);
+    expect(r.stderr).not.toContain("drifted");
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("bakes ONE token-removal loop — enforce, notice and st_one share remaining_tokens", () => {
+    // Three copies of the exclusion's token loop is how st_one drifted to
+    // whole-subject semantics in the first place. The helper is the single
+    // owner now: the per-token loop exists exactly once, inside it, and each
+    // of the three callers routes through it.
+    const script = generateHook({
+      ...compile(loadEffectivePolicy()),
+      logFile: "",
+    });
+    expect(script).toContain("remaining_tokens() {");
+    expect(script.match(/for tok in \$1; do/g)).toHaveLength(1);
+    expect(script.match(/=\$\(remaining_tokens "/g)).toHaveLength(3);
   });
 
   it("a rule without examples asserts nothing and still reports zero", () => {
