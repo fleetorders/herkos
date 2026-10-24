@@ -1358,14 +1358,27 @@ export const claudeCodeAdapter: HarnessAdapter = {
   unwire(): WireResult {
     const changed: string[] = [];
     const sp = settingsPath(detectConfigDir());
-    let settingsNote = "";
+    const ownedFiles = [
+      hookPath(),
+      sessionStartHookPath(),
+      policySnapshotPath(),
+      ownedSettingsPath(),
+    ];
     const read = readSettingsForRead(sp);
     if (read.kind === "broken") {
-      // "Adapters are reversible" must survive a corrupted settings file: the
-      // hook file, the snapshot and the ownership record are hers and come out
-      // whatever the settings say; the settings themselves cannot be cleaned
-      // until the user fixes the file, so that is said, not thrown.
-      settingsNote = ` — could not clean ${sp} (not valid JSON: ${read.reason}); fix or remove it and re-run 'herkos uninstall' to finish`;
+      // "Adapters are reversible" must survive a corrupted settings file, and
+      // reversible means the re-run this case promises can actually finish:
+      // the settings cannot be cleaned (herkos never writes a file it cannot
+      // parse), and nothing they still reference may come out either. The hook
+      // entries sit inside the file, armed again the moment it is repaired,
+      // and the ownership record is the only list of the deny and sandbox
+      // entries that re-run removes. Touch nothing and say so.
+      return {
+        changed,
+        detail: ownedFiles.some((p) => fs.existsSync(p))
+          ? `uninstall could not finish: ${sp} is not valid JSON (${read.reason}); herkos files and entries stay in place, the hook still armed; fix or remove the file, then re-run 'herkos uninstall' to finish`
+          : `nothing of herkos found on disk; ${sp} is not valid JSON (${read.reason}), so entries inside it could not be checked; fix or remove the file if herkos was wired here`,
+      };
     }
     if (read.kind === "ok") {
       const settings = read.settings;
@@ -1429,12 +1442,7 @@ export const claudeCodeAdapter: HarnessAdapter = {
         changed.push(sp);
       }
     }
-    for (const f of [
-      hookPath(),
-      sessionStartHookPath(),
-      policySnapshotPath(),
-      ownedSettingsPath(),
-    ]) {
+    for (const f of ownedFiles) {
       if (fs.existsSync(f)) {
         fs.rmSync(f);
         changed.push(f);
@@ -1442,9 +1450,7 @@ export const claudeCodeAdapter: HarnessAdapter = {
     }
     return {
       changed,
-      detail:
-        (changed.length ? "herkos wiring removed" : "nothing to remove") +
-        settingsNote,
+      detail: changed.length ? "herkos wiring removed" : "nothing to remove",
     };
   },
 
