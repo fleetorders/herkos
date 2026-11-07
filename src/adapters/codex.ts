@@ -453,31 +453,40 @@ function upsertBlock(content: string, block: string): string {
  * line then survived uninstall while the profile table went with it — a
  * selector naming a profile that no longer exists, which Codex refuses to
  * load. Only the root-section spelling goes: the same key
- * deeper in the file belongs to a table and is somebody else's.
+ * deeper in the file belongs to a table and is somebody else's, and the same
+ * text inside a triple-quoted string is the user's prose. The MARKED line goes
+ * wherever it sits, string included: the marker is herkos's own text, and the
+ * string-blind wiring of earlier releases wrote it inside a multiline string.
  */
 function removeRootLine(content: string): string {
-  const lines = content.replace(ROOT_RE, "").split("\n");
+  const lines = content.split("\n").filter((l) => !l.includes(ROOT_MARK));
   const structural = structuralLineMap(lines);
   const end = lines.findIndex(
     (l, i) => structural[i] && (/^\s*\[/.test(l) || l.startsWith(BEGIN)),
   );
-  const root = end === -1 ? lines : lines.slice(0, end);
   const bare = /^\s*default_permissions\s*=\s*"herkos"\s*(?:#.*)?$/;
-  return [
-    ...root.filter((l) => !bare.test(l)),
-    ...(end === -1 ? [] : lines.slice(end)),
-  ].join("\n");
+  return lines
+    .filter(
+      (l, i) => !(structural[i] && (end === -1 || i < end) && bare.test(l)),
+    )
+    .join("\n");
 }
 
 /**
  * Put the root line in the root section: before the first table header, or
  * before our own managed block if that comes first, else at the end. Any
  * previous herkos root line is removed first, so the call is idempotent.
+ * Only a line that begins outside a triple-quoted string is a header: a `[…]`
+ * line inside `developer_instructions = """…"""` is text, and the selector
+ * written before it sat inside the string, where Codex never reads it.
  */
 function upsertRootLine(content: string): string {
   const c = removeRootLine(content);
   const lines = c.split("\n");
-  let at = lines.findIndex((l) => /^\s*\[/.test(l) || l.startsWith(BEGIN));
+  const structural = structuralLineMap(lines);
+  let at = lines.findIndex(
+    (l, i) => structural[i] && (/^\s*\[/.test(l) || l.startsWith(BEGIN)),
+  );
   if (at === -1) at = lines.length;
   const before = lines.slice(0, at);
   const after = lines.slice(at);
@@ -487,12 +496,35 @@ function upsertRootLine(content: string): string {
   return [...before, ROOT_LINE, ...after].join("\n");
 }
 
-/** Is the herkos root line present in the ROOT section (above every table)? */
+/**
+ * Is the herkos root line present in the ROOT section (above every table)?
+ * Lines inside a triple-quoted string are neither the root line nor a table
+ * header: read as text search, a selector inside the string counted as
+ * active and verify reported a profile Codex never selected.
+ */
 function rootLineActive(content: string): boolean {
-  const idx = content.indexOf(ROOT_LINE);
-  if (idx === -1) return false;
-  const head = content.slice(0, idx);
-  return !/^\s*\[/m.test(head);
+  const lines = content.split("\n");
+  const structural = structuralLineMap(lines);
+  for (let i = 0; i < lines.length; i++) {
+    if (!structural[i]) continue;
+    const line = lines[i]!;
+    if (/^\s*\[/.test(line)) return false;
+    if (line.trim() === ROOT_LINE) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether the user sets `default_permissions` themselves, outside herkos's
+ * own lines. Only a key counts: the same text inside a triple-quoted string
+ * is prose, and reading it as a key left the profile unselected.
+ */
+function userSetsSelector(content: string): boolean {
+  const lines = stripBlocks(removeRootLine(content)).split("\n");
+  const structural = structuralLineMap(lines);
+  return lines.some(
+    (l, i) => structural[i] && /^\s*default_permissions\s*=/.test(l),
+  );
 }
 
 /**
@@ -673,8 +705,7 @@ export const codexAdapter: HarnessAdapter = {
       }
     }
     // Refuse to clobber a user's own default_permissions set OUTSIDE our block.
-    const outside = stripBlocks(removeRootLine(content));
-    const conflict = /^\s*default_permissions\s*=/m.test(outside);
+    const conflict = userSetsSelector(content);
     const { block } = buildManagedBlock();
     // Tables go at the end; the selecting root key goes above the first table.
     let next = upsertBlock(content, block);

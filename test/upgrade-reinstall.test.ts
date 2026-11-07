@@ -238,6 +238,85 @@ describe("re-running init over an earlier install", () => {
     expect(out).toContain('[projects."/work/a"]');
   });
 
+  it("Codex: the root selector goes after a multiline string, never into it", () => {
+    // The selector used to land before the first `[` line, string or not: it
+    // was written inside developer_instructions, Codex never selected the
+    // profile, and verify still said ok.
+    const cfg = path.join(process.env.CODEX_HOME!, "config.toml");
+    fs.writeFileSync(cfg, STRING_EXAMPLE);
+    codexAdapter.wire(compile(loadEffectivePolicy()));
+    const out = fs.readFileSync(cfg, "utf8");
+    const stringBody =
+      'developer_instructions = """\n' +
+      "[permissions.herkos]  # an example, inside a string\n" +
+      'extends = ":workspace"\n' +
+      '"""\n';
+    // The string is byte-for-byte the user's, and the selector follows it.
+    expect(out).toContain(stringBody);
+    expect(out.indexOf(stringBody)).toBeLessThan(
+      out.indexOf('default_permissions = "herkos"'),
+    );
+    expect(out.indexOf('default_permissions = "herkos"')).toBeLessThan(
+      out.indexOf('[projects."/work/a"]'),
+    );
+    expect(codexAdapter.verify().ok).toBe(true);
+    codexAdapter.unwire();
+    expect(fs.readFileSync(cfg, "utf8")).toContain(stringBody);
+    expect(fs.readFileSync(cfg, "utf8")).not.toMatch(/default_permissions/);
+  });
+
+  it("Codex: a selector inside a string does not count as selected, and init moves it out", () => {
+    // The shape the string-blind wiring left behind: the marked selector
+    // inside developer_instructions, the profile block at the end.
+    const cfg = path.join(process.env.CODEX_HOME!, "config.toml");
+    fs.writeFileSync(cfg, STRING_EXAMPLE);
+    codexAdapter.wire(compile(loadEffectivePolicy()));
+    const marked =
+      'default_permissions = "herkos" # >>> herkos managed root key (see the herkos block at the end) <<<\n';
+    const polluted = fs
+      .readFileSync(cfg, "utf8")
+      .replace(marked, "")
+      .replace(
+        "[permissions.herkos]  # an example",
+        `${marked}[permissions.herkos]  # an example`,
+      );
+    fs.writeFileSync(cfg, polluted);
+    expect(codexAdapter.verify().ok).toBe(false);
+    expect(codexAdapter.verify().detail).toContain("NOT selected");
+    codexAdapter.wire(compile(loadEffectivePolicy()));
+    const out = fs.readFileSync(cfg, "utf8");
+    // One selector line (the block's own comment names the key too).
+    expect(out.match(/^default_permissions = "herkos"/gm)).toHaveLength(1);
+    expect(out).toContain(
+      'developer_instructions = """\n[permissions.herkos]  # an example',
+    );
+    expect(codexAdapter.verify().ok).toBe(true);
+  });
+
+  it("Codex: a selector line inside the user's string is text — kept, and no conflict", () => {
+    const cfg = path.join(process.env.CODEX_HOME!, "config.toml");
+    const doc =
+      'notes = """\n' +
+      "To pick the profile, set:\n" +
+      'default_permissions = "herkos"\n' +
+      '"""\n\n' +
+      '[projects."/work/a"]\ntrust_level = "trusted"\n';
+    fs.writeFileSync(cfg, doc);
+    codexAdapter.wire(compile(loadEffectivePolicy()));
+    const out = fs.readFileSync(cfg, "utf8");
+    expect(out).toContain(
+      'To pick the profile, set:\ndefault_permissions = "herkos"\n"""\n',
+    );
+    // The string's line is not the user's own selector: the real one is
+    // written at the root and the profile is selected.
+    expect(out).toMatch(/^default_permissions = "herkos" # >>> herkos/m);
+    expect(codexAdapter.verify().ok).toBe(true);
+    codexAdapter.unwire();
+    expect(fs.readFileSync(cfg, "utf8")).toContain(
+      'To pick the profile, set:\ndefault_permissions = "herkos"\n"""\n',
+    );
+  });
+
   it("Codex: a triple quote inside a comment or one-line string is content, not an opener", () => {
     // Read as an opener, the comment's `'''` marked every line below
     // unstructural: the orphaned [permissions.herkos] rode through cleanup
