@@ -17,3 +17,10 @@ anchored to the bare fragment — `paths: ["secrets/"]` with `notPaths:
 ["/$"]`, allowing `ls secrets/` while file reads still block — is no
 longer refused as swallowing its own rule; the check now probes a token
 that merely contains the fragment.
+
+Policy validation no longer reads a grep that did not finish as "no
+match". On a busy machine a check could stall past its 5-second ceiling,
+and a `notPaths` exclusion that disables its own rule then passed
+validation silently. The ceiling is now 60 seconds, and a grep that times
+out, is killed or cannot start refuses the rule with that reason ("its
+patterns could not be checked"), so the command can simply be run again.

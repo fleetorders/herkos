@@ -465,21 +465,64 @@ const KNOWN_RULE_KEYS: readonly string[] = [
 ];
 
 /**
+ * Ceiling for one grep evaluation during validation. A pattern over a few
+ * short lines finishes in milliseconds; the cap only stops a pathological
+ * pattern from hanging the command. What it must clear is process-spawn
+ * latency on a loaded machine: a 5s cap was hit on a busy CI runner.
+ */
+const GREP_TIMEOUT_MS = 60_000;
+
+/**
+ * grep did not finish (timed out, killed, or could not start). That is not a
+ * verdict on the pattern: read as "no match", it silently passed an exclusion
+ * that disables its own rule. validatePolicy turns it into a stated error.
+ */
+class GrepUnfinished extends Error {}
+
+/** Run grep with the pattern as an argv element; throw GrepUnfinished unless it exited. */
+function runGrep(
+  args: string[],
+  input: string,
+): { status: number; stdout: string; stderr: string } {
+  const r = spawnSync("grep", args, {
+    input,
+    encoding: "utf8",
+    timeout: GREP_TIMEOUT_MS,
+  });
+  if (r.error || r.status === null) {
+    const code = (r.error as NodeJS.ErrnoException | undefined)?.code;
+    throw new GrepUnfinished(
+      code === "ETIMEDOUT"
+        ? `grep did not finish within ${GREP_TIMEOUT_MS / 1000}s`
+        : r.error
+          ? `grep could not run (${r.error.message})`
+          : `grep was stopped by ${r.signal ?? "a signal"}`,
+    );
+  }
+  return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+}
+
+/** A grep exit that is neither "matched" (0) nor "did not match" (1) is not a verdict. */
+function grepVerdict(r: { status: number; stderr: string }): boolean {
+  if (r.status === 0) return true;
+  if (r.status === 1) return false;
+  throw new GrepUnfinished(
+    `grep exited ${r.status}${r.stderr.trim() ? `: ${r.stderr.trim()}` : ""}`,
+  );
+}
+
+/**
  * Test one extended regex the way the hook will evaluate it: `grep -E` with
  * the pattern as an argv element (never through a shell string). Exit 0 or 1
- * means the pattern compiled; exit 2 or a spawn error means it did not.
+ * means the pattern compiled; any other exit means it did not. A grep that
+ * never finished throws GrepUnfinished — no verdict either way.
  */
 function grepAccepts(pattern: string): { ok: boolean; detail: string } {
-  const r = spawnSync("grep", ["-E", "-q", "-e", pattern], {
-    input: "",
-    encoding: "utf8",
-    timeout: 5_000,
-  });
-  if (r.error) return { ok: false, detail: String(r.error) };
+  const r = runGrep(["-E", "-q", "-e", pattern], "");
   if (r.status === 0 || r.status === 1) return { ok: true, detail: "" };
   return {
     ok: false,
-    detail: (r.stderr ?? "").trim() || `grep exited ${r.status}`,
+    detail: r.stderr.trim() || `grep exited ${r.status}`,
   };
 }
 
@@ -488,13 +531,9 @@ const MAX_SUBSUMPTION_PREFIXES = 200;
 
 /** Indexes of the `lines` that `re` matches, by `grep -E -n` in one process. */
 function grepMatchingLines(re: string, lines: string[]): number[] {
-  const r = spawnSync("grep", ["-E", "-n", "-e", re], {
-    input: lines.join("\n") + "\n",
-    encoding: "utf8",
-    timeout: 5_000,
-  });
-  if (r.status !== 0) return [];
-  return (r.stdout ?? "")
+  const r = runGrep(["-E", "-n", "-e", re], lines.join("\n") + "\n");
+  if (!grepVerdict(r)) return [];
+  return r.stdout
     .split("\n")
     .filter((l) => l !== "")
     .map((l) => Number.parseInt(l.slice(0, l.indexOf(":")), 10) - 1)
@@ -503,13 +542,7 @@ function grepMatchingLines(re: string, lines: string[]): number[] {
 
 /** Does `re` match `text`, by the hook's own evaluator (`grep -E`)? */
 function grepMatches(re: string, text: string): boolean {
-  return (
-    spawnSync("grep", ["-E", "-q", "-e", re], {
-      input: text,
-      encoding: "utf8",
-      timeout: 5_000,
-    }).status === 0
-  );
+  return grepVerdict(runGrep(["-E", "-q", "-e", re], text));
 }
 
 function checkEntries(
@@ -644,7 +677,16 @@ function warnSubsumedPrefixes(
   // fold to spaces, as the hook folds them (docs/decisions.md, D-006), so each probe is one line.
   const probes = prefixes.map((p) => ` ${spell(p).replace(/[\r\n]+/g, " ")} `);
   for (let i = 0; i < prefixes.length; i++) {
-    const hits = grepMatchingLines(prefixRegex(prefixes[i]!), probes);
+    let hits: number[];
+    try {
+      hits = grepMatchingLines(prefixRegex(prefixes[i]!), probes);
+    } catch (e) {
+      if (!(e instanceof GrepUnfinished)) throw e;
+      warnings.push(
+        `rule ${rid}: the duplicate-spelling check of commandPrefixes did not run — ${e.message}`,
+      );
+      return;
+    }
     for (const j of hits) {
       if (i === j) continue;
       warnings.push(
@@ -784,12 +826,27 @@ export function validatePolicy(policy: EffectivePolicy): ValidationResult {
         }
       }
     }
+    // Every check below asks grep, the hook's own evaluator. A grep that did
+    // not finish is no verdict: the rule is refused with the reason, never
+    // passed as if its patterns had been checked.
+    const checked = (run: () => void): void => {
+      try {
+        run();
+      } catch (e) {
+        if (!(e instanceof GrepUnfinished)) throw e;
+        errors.push(
+          `rule ${rid}: its patterns could not be checked — ${e.message}; run the command again (a busy machine can stall grep)`,
+        );
+      }
+    };
     const beforeMatchers = errors.length;
-    checkEntries(rid, "paths", rule.paths, errors);
-    checkEntries(rid, "notPaths", rule.notPaths, errors);
-    checkEntries(rid, "commandPatterns", rule.commandPatterns, errors);
-    checkEntries(rid, "codexDeny", rule.codexDeny, errors);
-    checkEntries(rid, "denyRead", rule.denyRead, errors);
+    checked(() => {
+      checkEntries(rid, "paths", rule.paths, errors);
+      checkEntries(rid, "notPaths", rule.notPaths, errors);
+      checkEntries(rid, "commandPatterns", rule.commandPatterns, errors);
+      checkEntries(rid, "codexDeny", rule.codexDeny, errors);
+      checkEntries(rid, "denyRead", rule.denyRead, errors);
+    });
     // An exclusion that swallows the rule's own fragment disables the rule for
     // every subject that fragment matches — `notPaths: ["."]` would pass every
     // other check and silently turn the rule off. The probe is a token that
@@ -804,20 +861,23 @@ export function validatePolicy(policy: EffectivePolicy): ValidationResult {
       const frags = (rule.paths ?? []).filter(
         (x): x is string => typeof x === "string" && x.length > 0,
       );
-      for (const np of (rule.notPaths ?? []).filter(
-        (x): x is string => typeof x === "string" && x.length > 0,
-      )) {
-        for (const frag of frags) {
-          if (grepMatches(np, `x/${frag}x`)) {
-            errors.push(
-              `rule ${rid}: notPaths entry ${JSON.stringify(np)} matches the rule's own path fragment ${JSON.stringify(frag)} in a token that merely contains it — it would disable the rule for every subject that fragment matches`,
-            );
+      checked(() => {
+        for (const np of (rule.notPaths ?? []).filter(
+          (x): x is string => typeof x === "string" && x.length > 0,
+        )) {
+          for (const frag of frags) {
+            if (grepMatches(np, `x/${frag}x`)) {
+              errors.push(
+                `rule ${rid}: notPaths entry ${JSON.stringify(np)} matches the rule's own path fragment ${JSON.stringify(frag)} in a token that merely contains it — it would disable the rule for every subject that fragment matches`,
+              );
+            }
           }
         }
-      }
+      });
     }
     // Examples only mean something once the rule's own matchers are valid.
-    if (errors.length === beforeMatchers) checkExamples(rid, rule, errors);
+    if (errors.length === beforeMatchers)
+      checked(() => checkExamples(rid, rule, errors));
     // Unknown keys only matter for user rules — the baseline is ours.
     if (!BASELINE.some((b) => b === raw)) {
       for (const k of Object.keys(raw)) {

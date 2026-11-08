@@ -356,6 +356,33 @@ describe("notPaths exclusions", () => {
     ).toBe(true);
   });
 
+  it("are refused with the reason when grep stalls on the probe — a stalled grep is no verdict", () => {
+    // A grep that compiles every pattern (empty input → exit 1) but dies on
+    // any real input stands in for a spawn stalled past its ceiling on a
+    // loaded machine. Read as "no match", the swallowing exclusion above
+    // passed validation silently; it must be refused, saying why.
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), "herkos-stall-grep-"));
+    fs.writeFileSync(
+      path.join(bin, "grep"),
+      '#!/bin/sh\nin=$(cat)\n[ -z "$in" ] && exit 1\nkill -9 $$\n',
+      { mode: 0o755 },
+    );
+    const saved = process.env.PATH;
+    process.env.PATH = `${bin}${path.delimiter}${saved ?? ""}`;
+    let v;
+    try {
+      v = validatePolicy(ruleWith({ paths: ["/.env"], notPaths: ["."] }));
+    } finally {
+      process.env.PATH = saved;
+    }
+    const mine = v.errors.filter((e) => e.includes("test-rule"));
+    expect(mine.length).toBeGreaterThan(0);
+    expect(
+      mine.every((e) => e.includes("its patterns could not be checked")),
+    ).toBe(true);
+    expect(mine.some((e) => e.includes("SIGKILL"))).toBe(true);
+  });
+
   it("accept a narrow exclusion anchored to the bare fragment — it does not swallow the rule", () => {
     // `paths: ["secrets/"]` with `notPaths: ["/$"]` allows `ls secrets/`
     // while `cat secrets/prod/db.json` still blocks: at run time the
