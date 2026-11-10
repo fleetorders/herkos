@@ -439,6 +439,34 @@ describe("re-running init over an earlier install", () => {
     expect(hookWiredInHooksJson(file(`cat "${abs}" | wc -l`))).toBe(false);
     // A file that is not JSON says "not wired", never "maybe".
     expect(hookWiredInHooksJson("{not json")).toBe(false);
+    // The right command under the wrong event, or behind a matcher that never
+    // fires for Bash, blocks nothing — it must not read as wired.
+    const cmd = `sh "${abs}" --harness codex`;
+    const shaped = (event: string, matcher?: string): string =>
+      JSON.stringify({
+        hooks: {
+          [event]: [
+            {
+              ...(matcher === undefined ? {} : { matcher }),
+              hooks: [{ type: "command", command: cmd }],
+            },
+          ],
+        },
+      });
+    expect(hookWiredInHooksJson(shaped("PostToolUse", "^Bash$"))).toBe(false);
+    expect(hookWiredInHooksJson(shaped("PreToolUse", "^Read$"))).toBe(false);
+    expect(hookWiredInHooksJson(shaped("PreToolUse", "*"))).toBe(true);
+    expect(hookWiredInHooksJson(shaped("PreToolUse"))).toBe(true);
+  });
+
+  it("commandRuns: sh -n and assignment-only words are not invocations", () => {
+    const abs = path.join(home, ".config", "herkos", "hook-claude-code.sh");
+    expect(commandRuns(`sh -n "${abs}"`, abs)).toBe(false);
+    expect(commandRuns(`bash -nx "${abs}"`, abs)).toBe(false);
+    expect(commandRuns(`nice -n 10 sh "${abs}"`, abs)).toBe(true);
+    expect(commandRuns(`HOOK="${abs}" echo hi`, abs)).toBe(false);
+    expect(commandRuns(`FOO=1 sh "${abs}"`, abs)).toBe(true);
+    expect(commandRuns(`sh "${abs}"`, abs)).toBe(true);
   });
 
   const SHARED = {

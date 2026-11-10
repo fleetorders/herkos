@@ -87,6 +87,36 @@ function isRunnerArgument(word: string): boolean {
   );
 }
 
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+/** The command position is the first word AFTER any leading `NAME=value`
+ * assignments (`FOO=1 sh "$abs"` runs sh; `HOOK=$abs echo` runs echo). */
+function withoutLeadingAssignments(words: string[]): string[] {
+  let n = 0;
+  while (n < words.length && ASSIGNMENT.test(words[n]!)) n++;
+  return words.slice(n);
+}
+
+const SHELL_WORDS = new Set(["sh", "bash", "dash", "zsh"]);
+
+/** Is the word at `idx` a shell's no-execute switch (`sh -n script` only
+ * parses the script; `-o noexec` likewise)? Judged against the nearest
+ * runner before it, since `nice -n 10 sh script` is a priority, not a
+ * syntax check. */
+function noExec(words: string[], idx: number): boolean {
+  const w = words[idx]!;
+  let owner = "";
+  for (let k = idx - 1; k >= 0; k--) {
+    if (RUNNER_WORDS.has(words[k]!)) {
+      owner = words[k]!;
+      break;
+    }
+  }
+  if (!SHELL_WORDS.has(owner)) return false;
+  if (w === "noexec") return words[idx - 1] === "-o";
+  return /^-[A-Za-z]*n[A-Za-z]*$/.test(w);
+}
+
 /**
  * Does a registered command run the script at `abs`, in any spelling? The
  * path must stand in command position — the first word of a segment, or the
@@ -147,19 +177,23 @@ export function commandRuns(command: string, abs: string): boolean {
   const strip = (word: string) => word.replace(/\\?['"]/g, "");
   return pathSpellings(abs).some((s) =>
     command.split(/[\n;&|()]+/).some((segment) =>
-      splitSegmentWords(segment)
-        .map(strip)
-        .filter(Boolean)
-        .some((word, i, words) => {
-          const claims =
-            word === s ||
-            (word.startsWith(s) && !pathChar.test(word[s.length] ?? "")) ||
-            (word.endsWith(s) &&
-              !pathChar.test(word[word.length - s.length - 1] ?? ""));
-          if (!claims || i === 0) return claims;
-          if (!RUNNER_WORDS.has(words[0]!)) return false;
-          return words.slice(1, i).every(isRunnerArgument);
-        }),
+      withoutLeadingAssignments(
+        splitSegmentWords(segment).map(strip).filter(Boolean),
+      ).some((word, i, words) => {
+        // An assignment word (`HOOK=/path/hook.sh echo`) names the path as
+        // a VALUE; it never runs it.
+        if (ASSIGNMENT.test(word)) return false;
+        const claims =
+          word === s ||
+          (word.startsWith(s) && !pathChar.test(word[s.length] ?? "")) ||
+          (word.endsWith(s) &&
+            !pathChar.test(word[word.length - s.length - 1] ?? ""));
+        if (!claims || i === 0) return claims;
+        if (!RUNNER_WORDS.has(words[0]!)) return false;
+        return words
+          .slice(1, i)
+          .every((w, j) => isRunnerArgument(w) && !noExec(words, j + 1));
+      }),
     ),
   );
 }
@@ -683,7 +717,19 @@ fi
 # against a nonsense path. . is the portable answer, same as dirname(1).
 case "$0" in
   */*) SELF_DIR=\${0%/*} ;;
-  *) SELF_DIR=. ;;
+  *)
+    # Invoked by bare name: resolve it as the shell did (cwd, else PATH) so a
+    # relative LOG_FILE lands beside THIS script, not in whatever cwd is.
+    if [ -f "$0" ]; then
+      SELF_DIR=.
+    else
+      SELF_PATH=$(command -v -- "$0" 2>/dev/null) || SELF_PATH=""
+      case "$SELF_PATH" in
+        */*) SELF_DIR=\${SELF_PATH%/*} ;;
+        *) SELF_DIR=. ;;
+      esac
+    fi
+    ;;
 esac
 case "$LOG_FILE" in
   ""|/*) ;;
@@ -918,23 +964,32 @@ if [ "\${1:-}" = "--selftest" ]; then
     # a real target beside an excluded spelling still fires, exactly as at
     # run time (a whole-subject test here once FAILED the mixed case enforce
     # blocks correctly — the selftest drifting from the thing it proves).
-    st_subject=$3
-    if [ -n "$4" ]; then
-      printf '%s' "$3" | grep -Eq -e "$4" 2>/dev/null
-      st_rc=$?
-      if [ "$st_rc" -ge 2 ]; then
-        printf 'herkos selftest FAIL: %s — the rule exclusion cannot be evaluated (grep exit %s)\\n' "$1" "$st_rc" >&2
-        SELFTEST_FAIL=1
-        return 0
-      fi
-      st_subject=$(remaining_tokens "$3" "$4")
-    fi
-    printf '%s' "$st_subject" | grep -Eq -e "$5" 2>/dev/null
+    # The primary pattern is tested FIRST, as enforce does: the exclusion is
+    # evaluated only once it has matched, so an example the pattern never
+    # fires on has no verdict for a broken exclusion to flip.
+    printf '%s' "$3" | grep -Eq -e "$5" 2>/dev/null
     st_rc=$?
     if [ "$st_rc" -ge 2 ]; then
       printf 'herkos selftest FAIL: %s — the baked patterns cannot be evaluated (grep exit %s)\\n' "$1" "$st_rc" >&2
       SELFTEST_FAIL=1
       return 0
+    fi
+    if [ "$st_rc" -eq 0 ] && [ -n "$4" ]; then
+      printf '%s' "$3" | grep -Eq -e "$4" 2>/dev/null
+      st_xrc=$?
+      if [ "$st_xrc" -ge 2 ]; then
+        printf 'herkos selftest FAIL: %s — the rule exclusion cannot be evaluated (grep exit %s)\\n' "$1" "$st_xrc" >&2
+        SELFTEST_FAIL=1
+        return 0
+      fi
+      st_subject=$(remaining_tokens "$3" "$4")
+      printf '%s' "$st_subject" | grep -Eq -e "$5" 2>/dev/null
+      st_rc=$?
+      if [ "$st_rc" -ge 2 ]; then
+        printf 'herkos selftest FAIL: %s — the baked patterns cannot be evaluated (grep exit %s)\\n' "$1" "$st_rc" >&2
+        SELFTEST_FAIL=1
+        return 0
+      fi
     fi
     if { [ "$2" = "1" ] && [ "$st_rc" -ne 0 ]; } || { [ "$2" = "0" ] && [ "$st_rc" -eq 0 ]; }; then
       printf 'herkos selftest FAIL: %s — the baked patterns no longer behave as the example says\\n' "$1" >&2

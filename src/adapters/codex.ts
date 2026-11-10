@@ -634,19 +634,36 @@ export function hookWiredInHooksJson(text: string): boolean {
   }
   const hooks = (doc as { hooks?: unknown } | null)?.hooks;
   if (!hooks || typeof hooks !== "object") return false;
-  return Object.values(hooks as Record<string, unknown>).some((entries) => {
-    if (!Array.isArray(entries)) return false;
-    return entries.some((e) => {
-      const inner = (e as { hooks?: unknown } | null)?.hooks;
-      if (!Array.isArray(inner)) return false;
-      return inner.some((h) =>
-        commandRuns(
-          String((h as { command?: unknown } | null)?.command ?? ""),
-          hookPath(),
-        ),
-      );
-    });
+  // Only a PreToolUse entry whose matcher covers the Bash tool can block a
+  // shell command: the same command under another event, or behind a matcher
+  // that never fires for Bash, is registered but enforces nothing.
+  const entries = (hooks as Record<string, unknown>)["PreToolUse"];
+  if (!Array.isArray(entries)) return false;
+  return entries.some((e) => {
+    const entry = e as { hooks?: unknown; matcher?: unknown } | null;
+    if (!matcherCoversBash(entry?.matcher)) return false;
+    const inner = entry?.hooks;
+    if (!Array.isArray(inner)) return false;
+    return inner.some((h) =>
+      commandRuns(
+        String((h as { command?: unknown } | null)?.command ?? ""),
+        hookPath(),
+      ),
+    );
   });
+}
+
+/** Does a hook matcher fire for the Bash tool? Absent, empty and `*` match
+ * every tool; anything else is a regex tested against the tool name. */
+function matcherCoversBash(matcher: unknown): boolean {
+  if (matcher === undefined || matcher === null) return true;
+  if (typeof matcher !== "string") return false;
+  if (matcher === "" || matcher === "*") return true;
+  try {
+    return new RegExp(matcher).test("Bash");
+  } catch {
+    return false;
+  }
 }
 
 export const codexAdapter: HarnessAdapter = {
