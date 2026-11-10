@@ -8,4 +8,14 @@ if [ -n "$COMMON_DIR" ] && [ -x "$COMPANION" ]; then
   "$COMPANION" "$@" || exit 1
 fi
 
-exit 0
+# Repo-owned checks (etymd never touches this file). The generated hook above already runs
+# format:check and typecheck; this adds the test suite, so a failure surfaces before the push
+# instead of in CI — the slowest feedback loop there is.
+# The runner is wrapped in a scrub of git's exported environment: git exports GIT_* names
+# (GIT_DIR, GIT_INDEX_FILE, ...) to every hook, and a child git obeys them over its own working
+# directory — the suite builds fixture repositories, and without the scrub those fixture
+# commits would land in THIS repository. Scrubbing every GIT_* name also covers one added by a
+# future git version, without anyone editing this line.
+echo "› npm test (git environment scrubbed)"
+# shellcheck disable=SC2046  # the split is the point: each name becomes its own -u argument
+env $(env | grep -o '^GIT_[A-Za-z0-9_]*' | sed 's/^/-u /') npm test || exit 1

@@ -5,8 +5,8 @@ import { isolateConfig } from "./helpers.js";
 
 const cfg = isolateConfig();
 
-// Imported through the module (its program.parse is skipped under vitest), so
-// the command bodies can be exercised without argv.
+// Imported as a module (cli.ts never parses argv — that lives in bin.ts, the
+// published entry), so the command bodies can be exercised without argv.
 const { __test } = await import("../src/cli.js");
 
 /**
@@ -75,5 +75,30 @@ describe("a corrupt policy file refuses cleanly in every command", () => {
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * The published binary must not be steered by a test runner's environment:
+ * `VITEST=1 herkos status` used to print nothing and exit 0, because
+ * program.parse() was gated on that variable inside the shipped entry. argv
+ * parsing lives in bin.ts (nothing imports it); cli.ts stays importable.
+ */
+describe("the entry point keeps test-runner variables out of production", () => {
+  const read = (rel: string): string =>
+    fs.readFileSync(new URL(rel, import.meta.url), "utf8");
+
+  it("cli.ts never parses argv and never mentions a test runner", () => {
+    const src = read("../src/cli.ts");
+    expect(src).not.toContain("VITEST");
+    expect(src).not.toMatch(/program\.parse\(\)/);
+  });
+
+  it("bin.ts is the entry that parses, and package.json points at it", () => {
+    const pkg = JSON.parse(read("../package.json")) as {
+      bin?: Record<string, string>;
+    };
+    expect(pkg.bin?.herkos).toBe("./dist/bin.js");
+    expect(read("../src/bin.ts")).toContain("program.parse()");
   });
 });
