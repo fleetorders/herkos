@@ -146,40 +146,55 @@ function noExec(words: string[], idx: number): boolean {
  * a wrapper merely names it) or a user's entry removed on unwire —
  * precision wins.
  */
-/** One segment's words, split on space/tab OUTSIDE single or double quotes;
- * the words still carry their quotes, for the caller to strip. */
-function splitSegmentWords(segment: string): string[] {
-  const words: string[] = [];
+/** The command's segments, each a list of dequoted words, from ONE pass that
+ * knows which quote is open. Outside quotes, `\n ; & | ( )` end a segment and
+ * space/tab end a word; inside a quote every character but the closing quote
+ * is literal, so an apostrophe in a double-quoted path (`"/Users/O'Brien/…"`)
+ * and a `(`, `)` or `&` in a quoted path stay part of the word. A backslash
+ * before a quote is dropped with it (the `\"` of a serialized hooks file) and
+ * the quote still toggles. */
+function splitSegments(command: string): string[][] {
+  const segments: string[][] = [];
+  let words: string[] = [];
   let cur = "";
   let quote: string | null = null;
-  for (const ch of segment) {
-    if (quote !== null) {
+  const endWord = () => {
+    if (cur !== "") words.push(cur);
+    cur = "";
+  };
+  const endSegment = () => {
+    endWord();
+    if (words.length > 0) segments.push(words);
+    words = [];
+  };
+  for (let i = 0; i < command.length; i++) {
+    let ch = command[i]!;
+    if (ch === "\\" && (command[i + 1] === '"' || command[i + 1] === "'")) {
+      ch = command[++i]!;
+    }
+    if (ch === '"' || ch === "'") {
+      if (quote === null) quote = ch;
+      else if (quote === ch) quote = null;
+      else cur += ch;
+    } else if (quote !== null) {
       cur += ch;
-      if (ch === quote) quote = null;
-    } else if (ch === '"' || ch === "'") {
-      cur += ch;
-      quote = ch;
+    } else if (/[\n;&|()]/.test(ch)) {
+      endSegment();
     } else if (ch === " " || ch === "\t") {
-      if (cur !== "") words.push(cur);
-      cur = "";
+      endWord();
     } else {
       cur += ch;
     }
   }
-  if (cur !== "") words.push(cur);
-  return words;
+  endSegment();
+  return segments;
 }
 
 export function commandRuns(command: string, abs: string): boolean {
   const pathChar = /[A-Za-z0-9._\-/~]/;
-  // A JSON-escaped quote carries its backslash; both go together, or the
-  // bare path that remains never matches a spelling.
-  const strip = (word: string) => word.replace(/\\?['"]/g, "");
   return pathSpellings(abs).some((s) =>
-    command.split(/[\n;&|()]+/).some((segment) =>
-      withoutLeadingAssignments(
-        splitSegmentWords(segment).map(strip).filter(Boolean),
-      ).some((word, i, words) => {
+    splitSegments(command).some((segment) =>
+      withoutLeadingAssignments(segment).some((word, i, words) => {
         // An assignment word (`HOOK=/path/hook.sh echo`) names the path as
         // a VALUE; it never runs it.
         if (ASSIGNMENT.test(word)) return false;

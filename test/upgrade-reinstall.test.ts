@@ -355,6 +355,15 @@ describe("re-running init over an earlier install", () => {
     expect(fs.readFileSync(cfg, "utf8")).toBe(before);
   });
 
+
+  it("recognises a quoted path containing an apostrophe, parenthesis or ampersand", () => {
+    for (const home of ["/Users/Pat O'Brien", "/Users/A (b)", "/Users/R&D"]) {
+      const p = `${home}/.config/herkos/hook-claude-code.sh`;
+      expect(commandRuns(`sh "${p}" --harness claude-code`, p)).toBe(true);
+      expect(commandRuns(`prepare && sh "${p}"`, p)).toBe(true);
+      expect(commandRuns(`cat "${p}"`, p)).toBe(false);
+    }
+  });
   it("claims a command only when the path stands on its own", () => {
     const abs = path.join(home, ".config", "herkos", "hook-claude-code.sh");
     expect(commandRuns(OLD_CMD, abs)).toBe(true);
