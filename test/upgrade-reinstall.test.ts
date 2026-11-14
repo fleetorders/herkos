@@ -355,7 +355,6 @@ describe("re-running init over an earlier install", () => {
     expect(fs.readFileSync(cfg, "utf8")).toBe(before);
   });
 
-
   it("recognises a quoted path containing an apostrophe, parenthesis or ampersand", () => {
     for (const home of ["/Users/Pat O'Brien", "/Users/A (b)", "/Users/R&D"]) {
       const p = `${home}/.config/herkos/hook-claude-code.sh`;
