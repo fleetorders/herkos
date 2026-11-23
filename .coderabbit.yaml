@@ -1,4 +1,10 @@
-# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
-# CodeRabbit comments; it never requests changes.
+# yaml-language-server: $schema=https://coderabbit.ai/integrates/schema.v2.json
+# CodeRabbit holds a merge on Critical and Major findings only, and approves by
+# itself once those threads are resolved; lower findings stay comments.
+# reviews.request_changes_workflow (this file's former key) is a legacy alias of
+# auto_approvals.enabled: setting both turns Automatic Approvals off with a
+# configuration error, so the old key is removed, not kept beside the new one.
 reviews:
-  request_changes_workflow: false
+  auto_approvals:
+    enabled: true
+    min_blocking_severity: major
