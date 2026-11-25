@@ -215,6 +215,18 @@ describe("running the probe against a stubbed harness", () => {
     expect(reports[0]!.note).toContain("not wired");
   });
 
+  it("names the layer the run measures — the hook, not the home-anchored native layers", () => {
+    const { adapter } = stubAdapter("h", okVerify, () => run({}));
+    const runner = (adapter as unknown as { _runner: ProbeRunner })._runner;
+    const reports = runLiveProbe([adapter], {
+      budgetUsd: 0.5,
+      timeoutMs: 1000,
+      runner,
+    });
+    expect(reports[0]!.note).toContain("HOOK layer");
+    expect(reports[0]!.note).toContain("'herkos check' credits those");
+  });
+
   it("deletes every throwaway working directory it created", () => {
     const dirs: string[] = [];
     const { adapter } = stubAdapter("h", okVerify, ({ workingDir }) => {

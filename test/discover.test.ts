@@ -18,7 +18,7 @@ const {
 const policyFile = path.join(cfg, "policy.json");
 
 describe("the candidate catalogue is generic and valid", () => {
-  it("proposes no rule the baseline already covers, and every rule validates", () => {
+  it("proposes no rule the baseline already carries under its own id, and every rule validates", () => {
     const baseline = loadEffectivePolicy();
     for (const c of CANDIDATES) {
       expect(baseline.rules.some((r) => r.id === c.rule.id)).toBe(false);
@@ -31,6 +31,89 @@ describe("the candidate catalogue is generic and valid", () => {
     try {
       expect(validatePolicy(loadEffectivePolicy()).errors).toEqual([]);
     } finally {
+      fs.rmSync(policyFile, { force: true });
+    }
+  });
+
+  it("filters by the coverage the command itself uses, not by rule ids alone", () => {
+    // Plant every probe path, exactly as an auditor would: what is offered
+    // must be what isCovered leaves behind — the two candidates whose
+    // fragments sit inside an enabled baseline fragment are not offered,
+    // everything else the machine has is.
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "herkos-home-"));
+    try {
+      for (const c of CANDIDATES) {
+        const p = path.join(home, c.probe);
+        fs.mkdirSync(path.dirname(p), { recursive: true });
+        fs.writeFileSync(p, "x");
+      }
+      const ids = discoverCandidates(loadEffectivePolicy(), home).map(
+        (d) => d.candidate.rule.id,
+      );
+      expect(ids).not.toContain("gcloud-adc"); // inside ".config/gcloud/"
+      expect(ids).not.toContain("pypirc-home"); // the baseline's ".pypirc"
+      for (const c of CANDIDATES) {
+        if (c.rule.id === "gcloud-adc" || c.rule.id === "pypirc-home") {
+          continue;
+        }
+        expect(ids).toContain(c.rule.id);
+      }
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("offers a baseline-covered candidate once the covering rule is disabled", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "herkos-home-"));
+    try {
+      fs.writeFileSync(path.join(home, ".pypirc"), "token");
+      fs.writeFileSync(
+        policyFile,
+        JSON.stringify({ disable: ["token-rc-files"] }),
+      );
+      const ids = discoverCandidates(loadEffectivePolicy(), home).map(
+        (d) => d.candidate.rule.id,
+      );
+      expect(ids).toContain("pypirc-home");
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(policyFile, { force: true });
+    }
+  });
+
+  it("is not covered by a rule whose fragment is NARROWER than the candidate's", () => {
+    // A user rule protecting one specific file inside the candidate's scope
+    // must not hide the candidate: it protects that spelling, not the
+    // candidate's other paths. (The reverse substring direction used to mark
+    // this covered.)
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "herkos-home-"));
+    try {
+      fs.mkdirSync(path.join(home, ".config", "rclone"), {
+        recursive: true,
+      });
+      fs.writeFileSync(
+        path.join(home, ".config", "rclone", "rclone.conf"),
+        "token",
+      );
+      fs.writeFileSync(
+        policyFile,
+        JSON.stringify({
+          rules: [
+            {
+              id: "rclone-backup-only",
+              class: "credential-read",
+              description: "one specific spelling",
+              paths: [".config/rclone/rclone.conf.backup"],
+            },
+          ],
+        }),
+      );
+      const ids = discoverCandidates(loadEffectivePolicy(), home).map(
+        (d) => d.candidate.rule.id,
+      );
+      expect(ids).toContain("rclone-conf");
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
       fs.rmSync(policyFile, { force: true });
     }
   });

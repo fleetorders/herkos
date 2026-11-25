@@ -246,10 +246,69 @@ const BLOCK_RE = new RegExp(
 
 /** A table header herkos owns: `[permissions.herkos]` or one of its subtables. */
 // Matched in the spelling herkos writes. Other tools find their own sections by
-// their headings the same way and leave the rest of the file alone; exotic but
-// equivalent spellings of this one are out of scope, and the duplicate check
-// below still refuses a file that would repeat the heading as herkos writes it.
+// their headings the same way and leave the rest of the file alone; herkos does
+// not rewrite exotic spellings of this one either, but the duplicate check
+// below refuses a repeat in any spelling it can decode, so a spelling cleanup
+// cannot recognize still stops the wiring instead of doubling the table.
 const OWN_TABLE_RE = new RegExp(`^\\s*\\[permissions\\.${PROFILE}(\\]|\\.)`);
+
+/**
+ * Whether each line of a TOML document begins OUTSIDE a triple-quoted string.
+ * A `[permissions.herkos]` written inside `developer_instructions = """…"""`
+ * is an example in a string, not a table header: read as structure, cleanup
+ * deleted the text after it — closing quotes included — and a valid config
+ * came back as an unterminated string Codex cannot load.
+ * The scan alternates open/close from the left as a parser would: outside a
+ * string the first `"""`/`'''` opens one, inside it only the SAME delimiter
+ * closes it (the other is content). Outside a multiline string the scan also
+ * walks OVER one-line strings and stops at a `#` comment: a triple quote
+ * inside either (`# tip: ''' opens a literal`, `s = 'a """ b'`) is content,
+ * not an opener — treated as one, it marked every line below unstructural,
+ * an orphaned herkos table rode through cleanup, and wire wrote the table a
+ * second time with no refusal. `\"` inside a one-line BASIC string is
+ * honoured (a backslash-escaped quote would end the string early); a
+ * hand-written `\"""` outside that shape is out of scope.
+ */
+function structuralLineMap(lines: string[]): boolean[] {
+  const structural: boolean[] = [];
+  let open: string | null = null;
+  for (const line of lines) {
+    structural.push(open === null);
+    let rest = line;
+    scan: while (rest !== "") {
+      if (open !== null) {
+        const at = rest.indexOf(open);
+        if (at === -1) break;
+        rest = rest.slice(at + 3);
+        open = null;
+        continue;
+      }
+      for (let i = 0; i < rest.length; i++) {
+        const c = rest[i]!;
+        // Outside a string a `#` starts a comment: the rest of the line is
+        // text, whatever quotes it carries.
+        if (c === "#") break scan;
+        if (c !== '"' && c !== "'") continue;
+        if (rest[i + 1] === c && rest[i + 2] === c) {
+          open = c.repeat(3);
+          rest = rest.slice(i + 3);
+          continue scan;
+        }
+        // One-line string: walk to its close, honouring `\"` in a basic one.
+        let j = i + 1;
+        while (j < rest.length && rest[j] !== c) {
+          if (c === '"' && rest[j] === "\\") j++;
+          j++;
+        }
+        // Unterminated: malformed TOML either way — stop at end of line.
+        if (j >= rest.length) break scan;
+        i = j;
+      }
+      break;
+    }
+  }
+  return structural;
+}
 
 /**
  * Every managed block, and every herkos table left without its opening
@@ -257,14 +316,27 @@ const OWN_TABLE_RE = new RegExp(`^\\s*\\[permissions\\.${PROFILE}(\\]|\\.)`);
  * (seen on a live install: the opening marker was gone and the block sat
  * between other tables), and a marker-only search then appended a second
  * [permissions.herkos] that Codex refused as a duplicate key. An orphaned
- * table runs from its header to a blank line, the next table that is not
- * ours, or a stray closing marker, which goes with it.
+ * table runs from its header to the next table that is not ours, or a stray
+ * closing marker, which goes with it — never to a blank line: TOML binds the
+ * keys after one to the table all the same, so a blank-line terminator
+ * dropped the heading and re-homed its keys on the table above, leaving
+ * duplicated `extends` keys in a config Codex refuses.
  */
 function stripBlocks(content: string): string {
   const lines = content.replace(BLOCK_RE, "\n").split("\n");
+  const structural = structuralLineMap(lines);
   const kept: string[] = [];
   let inOwn = false;
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    // A line inside a triple-quoted string is the user's content, not
+    // structure: example tables in it ride through untouched. herkos tables
+    // hold no multiline strings, so a string opened inside one is dropped
+    // with it — content lines included.
+    if (!structural[i]) {
+      if (!inOwn) kept.push(line);
+      continue;
+    }
     if (OWN_TABLE_RE.test(line)) {
       inOwn = true;
       continue;
@@ -273,24 +345,95 @@ function stripBlocks(content: string): string {
       inOwn = false;
       continue;
     }
-    // herkos writes its tables without blank lines, so a blank line or a
-    // table that is not ours ends an orphan; what follows is the user's.
-    if (inOwn && (line.trim() === "" || /^\s*\[/.test(line))) inOwn = false;
+    // The next table that is not ours ends the orphan; what follows is the
+    // user's.
+    if (inOwn && /^\s*\[/.test(line)) inOwn = false;
     if (!inOwn) kept.push(line);
   }
   return kept.join("\n");
 }
 
-/** How many times each herkos table header appears in `content`. */
-function duplicateOwnTables(content: string): string[] {
-  const seen = new Map<string, number>();
-  for (const line of content.split("\n")) {
-    if (OWN_TABLE_RE.test(line)) {
-      const key = line.trim().replace(/\s+/g, "");
-      seen.set(key, (seen.get(key) ?? 0) + 1);
+/**
+ * The table a `[…]` line DEFINES, as decoded key parts: `[permissions.herkos]`,
+ * `[permissions."herkos"]` and `[ permissions . herkos ]` are the same table.
+ * Quoted parts decode (basic strings unescape, literal strings stay verbatim,
+ * so quoted spacing survives); a line herkos cannot decode — no closing
+ * bracket, an unterminated quote, junk after the bracket — returns null and
+ * is never treated as ours.
+ */
+function tablePathOf(line: string): string[] | null {
+  const s = line.trim();
+  if (!s.startsWith("[")) return null;
+  const arrayTable = s.startsWith("[[");
+  let i = arrayTable ? 2 : 1;
+  const parts: string[] = [];
+  let cur = "";
+  let partQuoted = false;
+  let quote: string | null = null;
+  let closedAt = -1;
+  for (; i < s.length; i++) {
+    const ch = s[i]!;
+    if (quote) {
+      if (quote === '"' && ch === "\\" && i + 1 < s.length) {
+        cur += s[i + 1]!;
+        i++;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      else cur += ch;
+      continue;
     }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      partQuoted = true;
+      continue;
+    }
+    if (ch === "]") {
+      if (arrayTable && s[i + 1] !== "]") return null;
+      if (arrayTable) i++;
+      closedAt = i + 1;
+      break;
+    }
+    if (ch === ".") {
+      parts.push(partQuoted ? cur : cur.trim());
+      cur = "";
+      partQuoted = false;
+      continue;
+    }
+    if (ch === "#") return null; // a comment before the bracket closed
+    cur += ch;
   }
-  return [...seen].filter(([, n]) => n > 1).map(([k]) => k);
+  if (closedAt === -1 || quote !== null) return null;
+  parts.push(partQuoted ? cur : cur.trim());
+  if (parts.some((p) => p === "")) return null;
+  // After the bracket only whitespace or a comment may follow.
+  const tail = s.slice(closedAt).trim();
+  if (tail !== "" && !tail.startsWith("#")) return null;
+  return parts;
+}
+
+/**
+ * Every heading that resolves to herkos's table or a subtable of it, counted
+ * by the table it DEFINES rather than the bytes it spells. This shared the
+ * heading matcher with cleanup once, so a spelling cleanup cannot recognize —
+ * `[permissions."herkos"]` — slipped past the guard too and wiring appended a
+ * second copy of the same table. Such a spelling is still
+ * never rewritten; wiring refuses and names it.
+ */
+function duplicateOwnTables(content: string): string[] {
+  const lines = content.split("\n");
+  const structural = structuralLineMap(lines);
+  const seen = new Map<string, number>();
+  const spelling = new Map<string, string>();
+  for (let i = 0; i < lines.length; i++) {
+    if (!structural[i]) continue;
+    const parts = tablePathOf(lines[i]!);
+    if (!parts || parts[0] !== "permissions" || parts[1] !== PROFILE) continue;
+    const key = JSON.stringify(parts);
+    seen.set(key, (seen.get(key) ?? 0) + 1);
+    if (!spelling.has(key)) spelling.set(key, lines[i]!.trim());
+  }
+  return [...seen].filter(([, n]) => n > 1).map(([k]) => spelling.get(k)!);
 }
 
 /**
@@ -304,19 +447,46 @@ function upsertBlock(content: string, block: string): string {
   return `${c}${c ? "\n\n" : ""}${block}\n`;
 }
 
+/**
+ * Drop herkos's root selector, marked or bare. A tool that strips comments
+ * takes the marker off `default_permissions = "herkos" # …`, and the bare
+ * line then survived uninstall while the profile table went with it — a
+ * selector naming a profile that no longer exists, which Codex refuses to
+ * load. Only the root-section spelling goes: the same key
+ * deeper in the file belongs to a table and is somebody else's, and the same
+ * text inside a triple-quoted string is the user's prose. The MARKED line goes
+ * wherever it sits, string included: the marker is herkos's own text, and the
+ * string-blind wiring of earlier releases wrote it inside a multiline string.
+ */
 function removeRootLine(content: string): string {
-  return content.replace(ROOT_RE, "");
+  const lines = content.split("\n").filter((l) => !l.includes(ROOT_MARK));
+  const structural = structuralLineMap(lines);
+  const end = lines.findIndex(
+    (l, i) => structural[i] && (/^\s*\[/.test(l) || l.startsWith(BEGIN)),
+  );
+  const bare = /^\s*default_permissions\s*=\s*"herkos"\s*(?:#.*)?$/;
+  return lines
+    .filter(
+      (l, i) => !(structural[i] && (end === -1 || i < end) && bare.test(l)),
+    )
+    .join("\n");
 }
 
 /**
  * Put the root line in the root section: before the first table header, or
  * before our own managed block if that comes first, else at the end. Any
  * previous herkos root line is removed first, so the call is idempotent.
+ * Only a line that begins outside a triple-quoted string is a header: a `[…]`
+ * line inside `developer_instructions = """…"""` is text, and the selector
+ * written before it sat inside the string, where Codex never reads it.
  */
 function upsertRootLine(content: string): string {
   const c = removeRootLine(content);
   const lines = c.split("\n");
-  let at = lines.findIndex((l) => /^\s*\[/.test(l) || l.startsWith(BEGIN));
+  const structural = structuralLineMap(lines);
+  let at = lines.findIndex(
+    (l, i) => structural[i] && (/^\s*\[/.test(l) || l.startsWith(BEGIN)),
+  );
   if (at === -1) at = lines.length;
   const before = lines.slice(0, at);
   const after = lines.slice(at);
@@ -326,12 +496,56 @@ function upsertRootLine(content: string): string {
   return [...before, ROOT_LINE, ...after].join("\n");
 }
 
-/** Is the herkos root line present in the ROOT section (above every table)? */
+/**
+ * Is the herkos root line present in the ROOT section (above every table)?
+ * Lines inside a triple-quoted string are neither the root line nor a table
+ * header: read as text search, a selector inside the string counted as
+ * active and verify reported a profile Codex never selected.
+ */
 function rootLineActive(content: string): boolean {
-  const idx = content.indexOf(ROOT_LINE);
-  if (idx === -1) return false;
-  const head = content.slice(0, idx);
-  return !/^\s*\[/m.test(head);
+  const lines = content.split("\n");
+  const structural = structuralLineMap(lines);
+  for (let i = 0; i < lines.length; i++) {
+    if (!structural[i]) continue;
+    const line = lines[i]!;
+    if (/^\s*\[/.test(line)) return false;
+    if (line.trim() === ROOT_LINE) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether the user sets `default_permissions` themselves, outside herkos's
+ * own lines. Only a key counts: the same text inside a triple-quoted string
+ * is prose, and reading it as a key left the profile unselected.
+ */
+function userSetsSelector(content: string): boolean {
+  const lines = stripBlocks(removeRootLine(content)).split("\n");
+  const structural = structuralLineMap(lines);
+  return lines.some(
+    (l, i) => structural[i] && /^\s*default_permissions\s*=/.test(l),
+  );
+}
+
+/**
+ * The value of the FIRST `default_permissions` in the root section — marked,
+ * bare (a comment-stripper's doing), or the user's own. Codex binds the key
+ * to whichever table is current, so only a root-section occurrence selects a
+ * profile; one deeper in the file is an ordinary key herkos does not touch.
+ * Null when the root section sets none.
+ */
+function rootSelectorValue(content: string): string | null {
+  const lines = content.split("\n");
+  const structural = structuralLineMap(lines);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (structural[i] && (/^\s*\[/.test(line) || line.startsWith(BEGIN)))
+      return null;
+    if (!structural[i]) continue;
+    const m = line.match(/^\s*default_permissions\s*=\s*"([^"]*)"/);
+    if (m) return m[1]!;
+  }
+  return null;
 }
 
 /**
@@ -404,6 +618,54 @@ function wireHook(doc: { hooks?: Record<string, unknown[]> }): void {
   fs.writeFileSync(p, JSON.stringify(doc, null, 2) + "\n");
 }
 
+/**
+ * Does hooks.json content wire the herkos hook? The file is parsed and each
+ * command checked with commandRuns; JSON that will not parse says "not
+ * wired". Matching on the raw text instead claimed a path merely MENTIONED
+ * in it — a wrapper that cats the script read as a wiring, and status
+ * reported enforcement that was not there.
+ */
+export function hookWiredInHooksJson(text: string): boolean {
+  let doc: unknown;
+  try {
+    doc = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  const hooks = (doc as { hooks?: unknown } | null)?.hooks;
+  if (!hooks || typeof hooks !== "object") return false;
+  // Only a PreToolUse entry whose matcher covers the Bash tool can block a
+  // shell command: the same command under another event, or behind a matcher
+  // that never fires for Bash, is registered but enforces nothing.
+  const entries = (hooks as Record<string, unknown>)["PreToolUse"];
+  if (!Array.isArray(entries)) return false;
+  return entries.some((e) => {
+    const entry = e as { hooks?: unknown; matcher?: unknown } | null;
+    if (!matcherCoversBash(entry?.matcher)) return false;
+    const inner = entry?.hooks;
+    if (!Array.isArray(inner)) return false;
+    return inner.some((h) =>
+      commandRuns(
+        String((h as { command?: unknown } | null)?.command ?? ""),
+        hookPath(),
+      ),
+    );
+  });
+}
+
+/** Does a hook matcher fire for the Bash tool? Absent, empty and `*` match
+ * every tool; anything else is a regex tested against the tool name. */
+function matcherCoversBash(matcher: unknown): boolean {
+  if (matcher === undefined || matcher === null) return true;
+  if (typeof matcher !== "string") return false;
+  if (matcher === "" || matcher === "*") return true;
+  try {
+    return new RegExp(matcher).test("Bash");
+  } catch {
+    return false;
+  }
+}
+
 export const codexAdapter: HarnessAdapter = {
   id: "codex",
   name: "Codex CLI",
@@ -460,8 +722,7 @@ export const codexAdapter: HarnessAdapter = {
       }
     }
     // Refuse to clobber a user's own default_permissions set OUTSIDE our block.
-    const outside = stripBlocks(removeRootLine(content));
-    const conflict = /^\s*default_permissions\s*=/m.test(outside);
+    const conflict = userSetsSelector(content);
     const { block } = buildManagedBlock();
     // Tables go at the end; the selecting root key goes above the first table.
     let next = upsertBlock(content, block);
@@ -471,7 +732,7 @@ export const codexAdapter: HarnessAdapter = {
     const dupes = duplicateOwnTables(next);
     if (dupes.length > 0) {
       throw new WireRefusalError(
-        `${p} would hold ${dupes.join(", ")} more than once, which Codex refuses — nothing was written; remove the extra herkos tables by hand, then re-run 'herkos init'`,
+        `${p} would define ${dupes.join(", ")} more than once — the same table in a different spelling counts — which Codex refuses; nothing was written. Remove the extra herkos table(s) by hand, then re-run 'herkos init'`,
       );
     }
     fs.writeFileSync(p, next);
@@ -545,7 +806,8 @@ export const codexAdapter: HarnessAdapter = {
       if (
         c.includes(BEGIN) ||
         ROOT_RE.test(c) ||
-        c.split("\n").some((l) => OWN_TABLE_RE.test(l))
+        c.split("\n").some((l) => OWN_TABLE_RE.test(l)) ||
+        rootSelectorValue(c) === PROFILE
       ) {
         fs.writeFileSync(p, removeRootLine(stripBlocks(c)));
         changed.push(p);
@@ -618,10 +880,7 @@ export const codexAdapter: HarnessAdapter = {
       };
     }
     const cfg = fs.readFileSync(p, "utf8");
-    const userSelects = /^\s*default_permissions\s*=\s*"herkos"/m.test(
-      removeRootLine(cfg),
-    );
-    if (!rootLineActive(cfg) && !userSelects) {
+    if (!rootLineActive(cfg) && rootSelectorValue(cfg) !== PROFILE) {
       return {
         ok: false,
         detail:
@@ -630,7 +889,7 @@ export const codexAdapter: HarnessAdapter = {
     }
     const hookWired =
       fs.existsSync(hooksJsonPath()) &&
-      commandRuns(fs.readFileSync(hooksJsonPath(), "utf8"), hookPath());
+      hookWiredInHooksJson(fs.readFileSync(hooksJsonPath(), "utf8"));
     // Prefix rules: live, refused by Codex at the last init, or missing/stale.
     const current = compile(loadEffectivePolicy());
     let prefixDetail = "";
@@ -687,12 +946,11 @@ export const codexAdapter: HarnessAdapter = {
       : "";
     const profileLive =
       cfg.includes(BEGIN) &&
-      (rootLineActive(cfg) ||
-        /^\s*default_permissions\s*=\s*"herkos"/m.test(removeRootLine(cfg)));
+      (rootLineActive(cfg) || rootSelectorValue(cfg) === PROFILE);
     const hookLive =
       fs.existsSync(hookPath()) &&
       fs.existsSync(hooksJsonPath()) &&
-      commandRuns(fs.readFileSync(hooksJsonPath(), "utf8"), hookPath());
+      hookWiredInHooksJson(fs.readFileSync(hooksJsonPath(), "utf8"));
     const prefixLive =
       fs.existsSync(codexRulesPath()) && !readCodexOwned().prefixRulesRejected;
     const effective = loadEffectivePolicy();

@@ -12,6 +12,7 @@ import {
 } from "../src/policy.js";
 import type { CompiledPolicy, EffectivePolicy, Rule } from "../src/policy.js";
 import { runSelfCheck, syntaxCheck } from "../src/selfcheck.js";
+import { SPAWN_TIMEOUT_MS } from "./helpers.js";
 import {
   generateHook,
   generateSessionStartHook,
@@ -40,7 +41,7 @@ function fireHook(
   const r = spawnSync("sh", [scriptPath], {
     input: payload,
     encoding: "utf8",
-    timeout: 10_000,
+    timeout: SPAWN_TIMEOUT_MS,
   });
   return { exit: r.status ?? -1, stderr: r.stderr ?? "" };
 }
@@ -342,6 +343,67 @@ describe("notPaths exclusions", () => {
           e.includes("test-rule") && e.includes("not a valid extended regex"),
       ),
     ).toBe(true);
+  });
+
+  it("are refused when one would swallow the rule's own path fragment", () => {
+    const v = validatePolicy(ruleWith({ paths: ["/.env"], notPaths: ["."] }));
+    expect(
+      v.errors.some(
+        (e) =>
+          e.includes("test-rule") &&
+          e.includes("matches the rule's own path fragment"),
+      ),
+    ).toBe(true);
+  });
+
+  it("are refused with the reason when grep stalls on the probe — a stalled grep is no verdict", () => {
+    // A grep that compiles every pattern (empty input → exit 1) but dies on
+    // any real input stands in for a spawn stalled past its ceiling on a
+    // loaded machine. Read as "no match", the swallowing exclusion above
+    // passed validation silently; it must be refused, saying why.
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), "herkos-stall-grep-"));
+    fs.writeFileSync(
+      path.join(bin, "grep"),
+      '#!/bin/sh\nin=$(cat)\n[ -z "$in" ] && exit 1\nkill -9 $$\n',
+      { mode: 0o755 },
+    );
+    const saved = process.env.PATH;
+    process.env.PATH = `${bin}${path.delimiter}${saved ?? ""}`;
+    let v;
+    try {
+      v = validatePolicy(ruleWith({ paths: ["/.env"], notPaths: ["."] }));
+    } finally {
+      process.env.PATH = saved;
+    }
+    const mine = v.errors.filter((e) => e.includes("test-rule"));
+    expect(mine.length).toBeGreaterThan(0);
+    expect(
+      mine.every((e) => e.includes("its patterns could not be checked")),
+    ).toBe(true);
+    expect(mine.some((e) => e.includes("SIGKILL"))).toBe(true);
+  });
+
+  it("accept a narrow exclusion anchored to the bare fragment — it does not swallow the rule", () => {
+    // `paths: ["secrets/"]` with `notPaths: ["/$"]` allows `ls secrets/`
+    // while `cat secrets/prod/db.json` still blocks: at run time the
+    // exclusion applies per token to full paths, so matching the bare
+    // fragment text kills only that spelling. Testing the exclusion against
+    // the bare fragment refused this policy and `init` wrote nothing.
+    const v = validatePolicy(
+      ruleWith({ paths: ["secrets/"], notPaths: ["/$"] }),
+    );
+    expect(v.errors).toEqual([]);
+  });
+
+  it("accept the baseline dotenv exclusion — it must not swallow the dotenv fragment", () => {
+    const dotenv = BASELINE.find((r) => r.id === "dotenv-files")!;
+    const v = validatePolicy({
+      rules: [dotenv],
+      disabled: [],
+      userPolicyPath: "/tmp/herkos-test-policy.json",
+      userPolicyLoaded: false,
+    });
+    expect(v.errors).toEqual([]);
   });
 
   it("make the rule's own match examples honest — an excluded spelling is not matched", () => {
@@ -711,7 +773,7 @@ describe("wiring stamp and session-start proof", () => {
       );
       const r = spawnSync("sh", [script], {
         encoding: "utf8",
-        timeout: 10_000,
+        timeout: SPAWN_TIMEOUT_MS,
       });
       return { exit: r.status ?? -1, out: (r.stdout ?? "") + (r.stderr ?? "") };
     } finally {

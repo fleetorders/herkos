@@ -13,6 +13,13 @@ import path from "node:path";
 import { loadEffectivePolicy, compile } from "./policy.js";
 import { generateHook } from "./adapters/claude-code.js";
 
+// The wall-clock cap for firing the generated hook at a payload exists so a
+// HUNG hook fails its check rather than hanging the battery — it is not a
+// budget a healthy hook spends. On a machine under load, spawn latency alone
+// can pass a tight cap, and the timeout then reads as the hook failing, so
+// the ceiling sits far above real spawn time instead.
+const SPAWN_TIMEOUT_MS = 60_000;
+
 export interface CheckCase {
   name: string;
   wantExit: number;
@@ -141,7 +148,10 @@ export function syntaxCheck(script: string): { ok: boolean; detail: string } {
   try {
     const f = path.join(tmp, "hook.sh");
     fs.writeFileSync(f, script);
-    const r = spawnSync("sh", ["-n", f], { encoding: "utf8", timeout: 10_000 });
+    const r = spawnSync("sh", ["-n", f], {
+      encoding: "utf8",
+      timeout: SPAWN_TIMEOUT_MS,
+    });
     const ok = r.status === 0;
     return {
       ok,
@@ -185,7 +195,7 @@ export function runSelfCheck(): {
   const st = spawnSync("sh", [script, "--selftest"], {
     input: "",
     encoding: "utf8",
-    timeout: 10_000,
+    timeout: SPAWN_TIMEOUT_MS,
   });
   const stOk = st.status === 0;
   results.push({
@@ -200,7 +210,7 @@ export function runSelfCheck(): {
     const r = spawnSync("sh", [script], {
       input: c.payload,
       encoding: "utf8",
-      timeout: 10_000,
+      timeout: SPAWN_TIMEOUT_MS,
     });
     const gotExit = r.status ?? -1;
     // A case whose rule the user disabled by id must now pass through.
